@@ -406,20 +406,19 @@ class Channel:
             needs_display = False  # calling on_channel_update always does a display at the end
 
     async def send_watch(self) -> bool:
-        if self._stream is None:
+        stream = self._stream  # Capture reference atomically to prevent race condition
+        if stream is None:
             return False
-        
         try:
             if self._spade_url is None:
                 self._spade_url = await self.get_spade_url()
-            
             async with self._twitch.request(
-                "POST", self._spade_url, data=self._stream._spade_payload
+                "POST", self._spade_url, data=stream._spade_payload  # Use captured 'stream' here
             ) as response:
+                # Log the actual status code to help debug Issue C
+                if response.status != 204:
+                    logger.debug(f"Spade request failed with status: {response.status}")
                 return response.status == 204
-        except (RequestException, MinerException) as e:
-            logger.warning(f"send_watch failed for {self.name}: {e}")
-            return False
         except Exception as e:
             logger.error(f"Unexpected error in send_watch for {self.name}: {e}")
             return False
