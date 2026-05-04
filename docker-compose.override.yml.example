@@ -1,0 +1,135 @@
+# docker-compose.override.yml.example
+# 
+# Copy this file to docker-compose.override.yml to customize your local setup
+# This file is automatically merged with docker-compose.yml
+#
+# Example: cp docker-compose.override.yml.example docker-compose.override.yml
+
+version: '3.8'
+
+services:
+  twitch-drops-miner:
+    # ========================================
+    # DEVELOPMENT OVERRIDES
+    # ========================================
+    
+    # Build configuration (optional)
+    # build:
+    #   context: .
+    #   target: final
+    #   args:
+    #     - PYTHON_VERSION=3.11
+    
+    # Development volumes - mount source code for hot reload
+    volumes:
+      # Override the default volumes if needed
+      - ./files/settings.json:/home/appuser/app/settings.json:ro
+      - ./files/cookies.jar:/home/appuser/app/cookies.jar
+      - ./files/logs:/home/appuser/app/logs
+      
+      # Uncomment to mount source code for development
+      # WARNING: This makes the container use your local code
+      # - ./:/home/appuser/app:ro
+      
+      # Development-specific config files
+      # - ./dev-config/settings.json:/home/appuser/app/settings.json:ro
+    
+    # Environment variable overrides
+    environment:
+      # Logging
+      - LOGGING_LEVEL=DEBUG  # DEBUG, INFO, WARNING, ERROR
+      - PYTHONUNBUFFERED=1
+      
+      # Discord notifications (set your webhook here)
+      # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+      # - DISCORD_SUMMARY_INTERVAL=60  # minutes
+      
+      # Performance tuning
+      # - MAINTENANCE_INTERVAL_MINUTES=15
+      # - PRIORITY_MODE=BALANCED  # PRIORITY_ONLY, ENDING_SOONEST, LOW_AVBL_FIRST, BALANCED
+      
+      # Timezone
+      - TZ=UTC
+    
+    # Resource limits (adjusted for development)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # More CPU for development
+          memory: 1G       # More memory for development
+        reservations:
+          memory: 256M
+    
+    # ========================================
+    # PRODUCTION OVERRIDES
+    # ========================================
+    # Uncomment these for production use
+    
+    # Restart policy
+    # restart: always
+    
+    # Healthcheck (optional tuning)
+    # healthcheck:
+    #   test: ["CMD", "python", "healthcheck.py"]
+    #   interval: 30s      # More frequent checks
+    #   timeout: 10s
+    #   retries: 5         # More retries before marking unhealthy
+    #   start_period: 60s  # Longer startup grace period
+    
+    # Logging configuration
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "50m"  # Larger logs
+    #     max-file: "5"    # More log files
+    
+    # Network configuration (if using custom networks)
+    # networks:
+    #   - twitch_network
+    
+    # ========================================
+    # MONITORING & OBSERVABILITY
+    # ========================================
+    
+    # Expose metrics port (if you add Prometheus support later)
+    # ports:
+    #   - "9090:9090"
+    
+    # Add labels for monitoring
+    # labels:
+    #   - "com.example.app=twitch-drops-miner"
+    #   - "com.example.environment=production"
+    #   - "com.example.version=2.0.0"
+
+# ========================================
+# ADDITIONAL SERVICES (optional)
+# ========================================
+
+# Uncomment to add Watchtower for automatic updates
+# watchtower:
+#   image: containrrr/watchtower
+#   container_name: watchtower
+#   restart: unless-stopped
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock
+#   environment:
+#     - WATCHTOWER_CLEANUP=true
+#     - WATCHTOWER_SCHEDULE=0 0 4 * * *  # 4 AM daily
+#     - WATCHTOWER_INCLUDE_STOPPED=true
+
+# Uncomment to add autoheal (auto-restart unhealthy containers)
+# autoheal:
+#   image: willfarrell/autoheal
+#   container_name: autoheal
+#   restart: unless-stopped
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock
+#   environment:
+#     - AUTOHEAL_CONTAINER_LABEL=all
+#     - AUTOHEAL_INTERVAL=60
+#     - AUTOHEAL_START_PERIOD=300
+
+# Custom networks (if needed)
+# networks:
+#   twitch_network:
+#     driver: bridge

@@ -1,0 +1,5 @@
+aiohttp
+yarl
+truststore
+colorama
+psutil
