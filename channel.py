@@ -4,6 +4,7 @@ import re
 import json
 import asyncio
 import logging
+from time import time
 from base64 import b64encode
 from functools import cached_property
 from typing import Any, SupportsInt, cast, TYPE_CHECKING
@@ -157,6 +158,8 @@ class Channel:
         self._login: str = login
         self._display_name: str | None = display_name
         self._spade_url: URLType | None = None
+        self._spade_url_fetched_at: float = 0
+        self.SPADE_URL_TTL = 3600
         self._stream: Stream | None = None
         self._pending_stream_up: asyncio.Task[Any] | None = None
         # ACL-based channels are:
@@ -410,8 +413,10 @@ class Channel:
         if stream is None:
             return False
         try:
-            if self._spade_url is None:
+            now = time()
+            if self._spade_url is None or (now - self._spade_url_fetched_at) > self.SPADE_URL_TTL:
                 self._spade_url = await self.get_spade_url()
+                self._spade_url_fetched_at = now
             async with self._twitch.request(
                 "POST", self._spade_url, data=stream._spade_payload  # Use captured 'stream' here
             ) as response:
