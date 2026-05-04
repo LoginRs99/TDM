@@ -51,7 +51,7 @@ from constants import (
     COOKIES_PATH,
     WORKING_DIR,
     MAX_CHANNELS,
-    GQL_OPERATIONS,
+    GQL_QUERIES,
     WATCH_INTERVAL,
     State,
     ClientType,
@@ -607,7 +607,7 @@ class Twitch:
 
             elif self._state is State.CHANNEL_SWITCH:
                 logger.info("State: CHANNEL_SWITCH")
-                new_watching = next((ch for ch in sorted(channels.values(), key=self.get_priority) if self.can_watch(ch) and self.should_switch(ch)), None)
+                new_watching = next((ch for ch in sorted(channels.values(), key=self.get_priority) if self.should_switch(ch)), None)
                 
                 if new_watching:
                     await asyncio.sleep(random.uniform(2, 8))
@@ -687,7 +687,7 @@ class Twitch:
                     continue
 
                 context = await self.gql_request(
-                    GQL_OPERATIONS["CurrentDrop"].with_variables({"channelID": str(channel.id)})
+                    GQL_QUERIES["CurrentDrop"].with_variables({"channelID": str(channel.id)})
                 )
                 if (drop_data := context["data"]["currentUser"]["dropCurrentSession"]) and \
                    (gql_drop := self._drops.get(drop_data["dropID"])) and \
@@ -780,13 +780,16 @@ class Twitch:
         return any(c.can_earn(channel) for c in self.inventory if c.game in self.wanted_games or not c.has_badge_or_emote)
 
     def should_switch(self, channel: Channel) -> bool:
-        """
-        Determines if we should switch from the current channel to a new candidate.
-        Includes a 'Hard Lock' mechanism to prevent leaving drops unfinished.
-        """
-        wc = self.watching_channel.get_with_default(None)
-        if not wc: return True
+        # ADD: candidate must be watchable first
+        if not self.can_watch(channel):
+            return False
 
+        wc = self.watching_channel.get_with_default(None)
+        # MODIFIED: also return True if current channel is no longer watchable
+        if not wc or not self.can_watch(wc):
+            return True
+
+        # Keep your existing lock-in logic unchanged below this line
         current_campaign = self.get_active_campaign(wc)
         if current_campaign:
             first_drop = current_campaign.first_drop
@@ -797,11 +800,11 @@ class Twitch:
                 logger.debug(f"🔒 Lock-in: Only {first_drop.remaining_minutes} min left")
                 return False
 
-        # --- 2. PRIORITY COMPARISON ---
         p_candidate = self.get_priority(channel)
         p_current = self.get_priority(wc)
-        
-        return p_candidate < p_current or (p_candidate == p_current and channel.acl_based and not wc.acl_based)
+        return p_candidate < p_current or (
+            p_candidate == p_current and channel.acl_based and not wc.acl_based
+        )
 
     def watch(self, channel: Channel, *, update_status: bool = True):
         self.watching_channel.set(channel)
@@ -822,7 +825,7 @@ class Twitch:
                     logger.info("Quick inventory refresh triggered by priority channel")
                     asyncio.create_task(self._quick_inventory_check())
             
-            if self.can_watch(channel) and self.should_switch(channel):
+            if self.should_switch(channel):
                 logger.info(f"{channel.name} came online and is a high priority. Switching.")
                 self.watch(channel)
         elif stream_before is not None and self.watching_channel.get_with_default(None) == channel and not self.can_watch(channel):
@@ -881,7 +884,7 @@ class Twitch:
                 # Ack/Delete the notification to clean up the UI
                 if notification_id := data.get("id"):
                     await self.gql_request(
-                        GQL_OPERATIONS["NotificationsDelete"].with_variables({
+                        GQL_QUERIES["NotificationsDelete"].with_variables({
                             "input": {"id": notification_id}
                         })
                     )
@@ -1014,8 +1017,8 @@ class Twitch:
 
         try:
             inv_resp, camp_resp = await asyncio.gather(
-                self.gql_request(GQL_OPERATIONS["Inventory"]),
-                self.gql_request(GQL_OPERATIONS["Campaigns"])
+                self.gql_request(GQL_QUERIES["Inventory"]),
+                self.gql_request(GQL_QUERIES["Campaigns"])
             )
             inventory = inv_resp["data"]["currentUser"]["inventory"]
             claimed_benefits = {b["id"]: timestamp(b["lastAwardedAt"]) for b in inventory["gameEventDrops"]}
@@ -1084,7 +1087,7 @@ class Twitch:
     async def _quick_inventory_check(self):
         try:
             logger.info("Running quick inventory check...")
-            inv_resp = await self.gql_request(GQL_OPERATIONS["Inventory"])
+            inv_resp = await self.gql_request(GQL_QUERIES["Inventory"])
             inventory = inv_resp["data"]["currentUser"]["inventory"]
             inventory_data = {c["id"]: c for c in inventory["dropCampaignsInProgress"] or []}
             
@@ -1111,7 +1114,7 @@ class Twitch:
 
     async def fetch_campaigns(self, campaigns_chunk: list[tuple[str, JsonType]]) -> dict[str, JsonType]:
         ids, auth = [c[0] for c in campaigns_chunk], await self.get_auth()
-        ops = [GQL_OPERATIONS["CampaignDetails"].with_variables({"channelLogin": str(auth.user_id), "dropID": cid}) for cid in ids]
+        ops = [GQL_QUERIES["CampaignDetails"].with_variables({"channelLogin": str(auth.user_id), "dropID": cid}) for cid in ids]
         details = await self.gql_request(ops)
         fetched_data = {(d["data"]["user"]["dropCampaign"]["id"]): d["data"]["user"]["dropCampaign"] for d in details}
         return self._merge_data(dict(campaigns_chunk), fetched_data)
@@ -1219,7 +1222,7 @@ class Twitch:
         
         try:
             context = await self.gql_request(
-                GQL_OPERATIONS["CurrentDrop"].with_variables({"channelID": str(channel.id)})
+                GQL_QUERIES["CurrentDrop"].with_variables({"channelID": str(channel.id)})
             )
             if (drop_data := context["data"]["currentUser"]["dropCurrentSession"]) and \
                (gql_drop := self._drops.get(drop_data["dropID"])) and \
@@ -1246,7 +1249,7 @@ class Twitch:
             return []
             
         try:
-            resp = await self.gql_request(GQL_OPERATIONS["GameDirectory"].with_variables({"limit": limit, "slug": game.slug, "options": {"systemFilters": ["DROPS_ENABLED"]}}))
+            resp = await self.gql_request(GQL_QUERIES["GameDirectory"].with_variables({"limit": limit, "slug": game.slug, "options": {"systemFilters": ["DROPS_ENABLED"]}}))
             if game_data := resp["data"].get("game"):
                 return [Channel.from_directory(self, e["node"], drops_enabled=True) for e in game_data["streams"]["edges"] if e["node"]["broadcaster"]]
         except (GQLException, MinerException) as e:
@@ -1281,7 +1284,7 @@ class Twitch:
             for cid, data in streams_map.items():
                 if data.get("stream") and cid is not None:
                     drop_ops.append(
-                        GQL_OPERATIONS["AvailableDrops"].with_variables({"channelID": str(cid)}) 
+                        GQL_QUERIES["AvailableDrops"].with_variables({"channelID": str(cid)}) 
                     )
             
             if drop_ops:

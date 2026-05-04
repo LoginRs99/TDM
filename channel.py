@@ -4,6 +4,7 @@ import re
 import json
 import asyncio
 import logging
+import gzip
 from time import time
 from base64 import b64encode
 from functools import cached_property
@@ -12,14 +13,14 @@ from typing import Any, SupportsInt, cast, TYPE_CHECKING
 import aiohttp
 from yarl import URL
 
-from utils import Game, json_minify
+from utils import Game, json_minify, isonow
 from exceptions import MinerException, RequestException
-from constants import CALL, GQL_OPERATIONS, ONLINE_DELAY, URLType
+from constants import CALL, GQL_QUERIES, ONLINE_DELAY, URLType, GQLQuery
 
 if TYPE_CHECKING:
     from twitch import Twitch
     # from gui import ChannelList
-    from constants import JsonType, GQLOperation
+    from constants import JsonType, GQLPersistedQuery
 
 
 logger = logging.getLogger("TwitchDrops")
@@ -44,25 +45,34 @@ class Stream:
         self._stream_url: URLType | None = None
 
     @cached_property
-    def _spade_payload(self) -> JsonType:
-        payload = [
+    def _gql_payload(self) -> GQLQuery:
+        payload =[
             {
                 "event": "minute-watched",
                 "properties": {
                     "broadcast_id": str(self.broadcast_id),
                     "channel_id": str(self.channel.id),
                     "channel": self.channel._login,
+                    "client_time": isonow(),
+                    "game": self.game.name if self.game is not None else "",
+                    "game_id": str(self.game.id) if self.game is not None else "",
                     "hidden": False,
+                    "is_live": True,
                     "live": True,
-                    "location": "channel",
                     "logged_in": True,
+                    "minutes_logged": 1,
                     "muted": False,
-                    "player": "site",
                     "user_id": self.channel._twitch._auth_state.user_id,
                 }
             }
         ]
-        return {"data": (b64encode(json_minify(payload).encode("utf8"))).decode("utf8")}
+        return GQLQuery(
+            (
+                "\n mutation SendEvents($input: SendSpadeEventsInput!) "
+                "{\n sendSpadeEvents(input: $input) {\n statusCode\n}\n}\n"
+            ),
+            b64encode(gzip.compress(json_minify(payload).encode("utf8"))).decode("utf8")
+        )
 
     @classmethod
     def from_get_stream(cls, channel: Channel, channel_data: JsonType) -> Stream:
@@ -159,7 +169,6 @@ class Channel:
         self._display_name: str | None = display_name
         self._spade_url: URLType | None = None
         self._spade_url_fetched_at: float = 0
-        self.SPADE_URL_TTL = 3600
         self._stream: Stream | None = None
         self._pending_stream_up: asyncio.Task[Any] | None = None
         # ACL-based channels are:
@@ -205,7 +214,7 @@ class Channel:
         return self.id
 
     @property
-    def stream_gql(self) -> GQLOperation:
+    def stream_gql(self) -> GQLPersistedQuery:
         return GQL_OPERATIONS["GetStreamInfo"].with_variables({"channel": self._login})
 
     @property
@@ -408,8 +417,8 @@ class Channel:
             self._twitch.on_channel_update(self, old_stream, self._stream)
             needs_display = False  # calling on_channel_update always does a display at the end
 
-    async def send_watch(self) -> bool:
-        stream = self._stream  # Capture reference atomically to prevent race condition
+    async def _send_watch_spade(self) -> bool:
+        stream = self._stream 
         if stream is None:
             return False
         try:
@@ -418,12 +427,20 @@ class Channel:
                 self._spade_url = await self.get_spade_url()
                 self._spade_url_fetched_at = now
             async with self._twitch.request(
-                "POST", self._spade_url, data=stream._spade_payload  # Use captured 'stream' here
+                "POST", self._spade_url, data=stream._spade_payload
             ) as response:
-                # Log the actual status code to help debug Issue C
                 if response.status != 204:
-                    logger.debug(f"Spade request failed with status: {response.status}")
+                    pass
                 return response.status == 204
-        except Exception as e:
-            logger.error(f"Unexpected error in send_watch for {self.name}: {e}")
+        except Exception:
+            return False
+
+    async def send_watch(self) -> bool:
+        stream = self._stream
+        if stream is None:
+            return False
+        try:
+            watch_response = await self._twitch.gql_request(stream._gql_payload)
+            return watch_response["data"]["sendSpadeEvents"]["statusCode"] == 204
+        except Exception:
             return False
