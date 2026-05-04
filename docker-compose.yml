@@ -1,0 +1,64 @@
+services:
+  twitch-drops-miner:
+    build: .
+    image: twitch-drops-miner:local
+    container_name: twitch-drops-miner
+    restart: unless-stopped
+    init: true
+    # Fix: Ensure the container has enough shared memory if the miner uses a headless browser
+    shm_size: '256mb'
+    user: "${UID:-1000}:${GID:-1000}"
+    
+    # NEW: DNS Fix
+    # Your logs showed 'ClientConnectorDNSError'. 
+    # Explicitly setting stable DNS helps prevent those look-up failures.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+    environment:
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - DISCORD_SUMMARY_INTERVAL=${DISCORD_SUMMARY_INTERVAL:-240}
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-UTC}
+    
+    volumes:
+      # Note: If the app tries to update settings automatically, remove ':ro'
+      - ./files/settings.json:/home/appuser/app/settings.json:ro
+      - ./files/cookies.jar:/home/appuser/app/cookies.jar
+      - ./files/watch_stats.json:/home/appuser/app/watch_stats.json
+      - ./files/logs:/home/appuser/app/logs
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 50M
+
+    sysctls:
+      # Fix: You had an '=' in the probes line, it must be ':'
+      net.ipv4.tcp_keepalive_time: 60
+      net.ipv4.tcp_keepalive_intvl: 10
+      net.ipv4.tcp_keepalive_probes: 5
+      
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+    deploy:
+      resources:
+        limits:
+          # Increased slightly. 0.5 CPU can be tight during 
+          # "INVENTORY_FETCH" if the JSON response is huge.
+          cpus: '0.75' 
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    healthcheck:
+      # Ensure healthcheck.py exists in your build context!
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
