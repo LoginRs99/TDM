@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import asyncio
 import logging
 from time import time
@@ -181,15 +182,17 @@ class Websocket:
         async for websocket in self._backoff_connect("wss://pubsub-edge.twitch.tv/v1", maximum=300):
             now = time()
             
-            # Reset counter if last connection lasted > 5 minutes
-            if now - last_success > 300:
+            SUSTAINED_OUTAGE_THRESHOLD = 1800  # 30 minutes
+            if now - last_success > SUSTAINED_OUTAGE_THRESHOLD:
                 reconnect_count = 0
+                logger.warning(f"Websocket[{self._idx}] reconnect counter reset after sustained outage")
             
             reconnect_count += 1
             
             if reconnect_count > max_reconnects:
-                logger.error(f"Websocket[{self._idx}] exceeded max reconnections")
-                await asyncio.sleep(1800)  # Wait 10 minutes
+                sleep_duration = random.uniform(1500, 2100)  # 25–35 mins with jitter
+                logger.error(f"Websocket[{self._idx}] exceeded max reconnections, sleeping {sleep_duration:.0f}s")
+                await asyncio.sleep(sleep_duration)
                 reconnect_count = 0
                 last_success = time()  # Reset timer
                 continue
