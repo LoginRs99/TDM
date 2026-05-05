@@ -718,7 +718,7 @@ class Twitch:
                     
                     # Validation check
                     time_since_progress = time() - self._last_progress_timestamp if self._last_progress_timestamp > 0 else 0
-                    if time_since_progress > 120 and (time() - self._last_validation_time) > 300:
+                    if time_since_progress > 240 and (time() - self._last_validation_time) > 300:
                         self._last_validation_time = time()
                         logger.info(f"⏱️ No progress for {time_since_progress:.0f}s, running validation...")
                         
@@ -734,14 +734,12 @@ class Twitch:
                                 continue
                         
                 elif (active_campaign := self.get_active_campaign(channel)):
-                    self._last_progress_timestamp = time()
                     active_campaign.bump_minutes(channel)
                     logger.debug(f"⏱️ Bumped minutes for {active_campaign.name}")
                     
             except GQLException as e:
                 logger.warning(f"GQL error during progress check: {e}")
                 if (active_campaign := self.get_active_campaign(channel)):
-                    self._last_progress_timestamp = time()
                     active_campaign.bump_minutes(channel)
 
             await self._watch_sleep(interval - min(time() - last_sent, interval))
