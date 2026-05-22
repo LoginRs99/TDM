@@ -15,10 +15,7 @@
         "enable_watch_stats": "Set true to write additional watch statistics. Leave false if you only want core mining behavior.",
         "exclude": "Optional set of exact game names to skip. Keep empty unless there are games you never want to watch.",
         "priority": "Optional ordered list of exact game names to prefer. Keep empty to let the miner choose automatically.",
-        "priority_mode": "How games are selected: 0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED. BALANCED is the recommended default.",
-        "priority_urgency_window_hours": "Hours before a campaign ending time is treated as urgent by BALANCED mode. Keep 48 unless you want earlier or later urgency.",
-        "priority_weight_preference": "BALANCED-mode weight for your priority list. Works with priority_weight_urgency and should roughly sum to 100.",
-        "priority_weight_urgency": "BALANCED-mode weight for campaigns ending soon. Works with priority_weight_preference and should roughly sum to 100.",
+        "priority_mode": "How games are selected: 0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED. BALANCED is recommended: priority list first, then scarce/urgent connected campaigns, then other active drops.",
         "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL. Example format is shown in _examples.proxy."
     },
     "_examples": {
@@ -55,9 +52,6 @@
         "__type": "PriorityMode",
         "data": 3
     },
-    "priority_urgency_window_hours": 48,
-    "priority_weight_preference": 55,
-    "priority_weight_urgency": 45,
     "proxy": {
         "__type": "URL",
         "data": ""
