@@ -4,13 +4,22 @@
         "docker": "Mount this file to /home/appuser/app/settings.json as read-only, then mount cookies.jar to /home/appuser/app/cookies.jar.",
         "login": "Login uses cookies.jar. Export Twitch browser cookies in Netscape cookie-file format and place the file at ./files/cookies.jar before starting Docker.",
         "login_expired": "If Twitch logs you out or cookies expire, export a fresh cookies.jar and restart the container. Do not commit cookies.jar.",
-        "priority": "Optional ordered list of game names to prefer. Leave empty to let the miner choose automatically.",
-        "exclude": "Optional set of game names to skip.",
-        "priority_mode": "0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED.",
-        "connection_quality": "1=low bandwidth, 2=medium, 3=high.",
+        "connection_quality": "Controls watch interval behavior. Use 1 for low bandwidth/default Docker use, 2 for normal connections, 3 only if you want more aggressive/high-quality watching.",
+        "stale_stream_timeout_minutes": "Minutes before a stream is considered stale and eligible for switching. Keep 5 unless channels often freeze; use 3 or higher.",
+        "maintenance_interval_minutes": "How often background maintenance and refresh checks run. Keep 20 for normal use. Lower values may increase Twitch API traffic; minimum safe value is 5.",
         "discord_webhook_url": "Leave blank to disable Discord notifications. Prefer DISCORD_WEBHOOK_URL in .env or compose secrets for real webhook URLs.",
+        "discord_summary_interval_minutes": "How often Discord summary notifications are sent when a webhook is configured. Valid range is 1-1440 minutes.",
         "logging_level": "One of DEBUG, INFO, WARNING, ERROR.",
-        "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL."
+        "enable_badges_emotes": "Set true to load Twitch badges/emotes data if supported. Leave false for a lean headless container.",
+        "available_drops_check": "Set true to perform extra available-drop checks. Leave false unless you need the extra discovery behavior.",
+        "enable_watch_stats": "Set true to write additional watch statistics. Leave false if you only want core mining behavior.",
+        "exclude": "Optional set of exact game names to skip. Keep empty unless there are games you never want to watch.",
+        "priority": "Optional ordered list of exact game names to prefer. Keep empty to let the miner choose automatically.",
+        "priority_mode": "How games are selected: 0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED. BALANCED is the recommended default.",
+        "priority_urgency_window_hours": "Hours before a campaign ending time is treated as urgent by BALANCED mode. Keep 48 unless you want earlier or later urgency.",
+        "priority_weight_preference": "BALANCED-mode weight for your priority list. Works with priority_weight_urgency and should roughly sum to 100.",
+        "priority_weight_urgency": "BALANCED-mode weight for campaigns ending soon. Works with priority_weight_preference and should roughly sum to 100.",
+        "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL. Example format is shown in _examples.proxy."
     },
     "_examples": {
         "priority": [
