@@ -165,7 +165,7 @@ class Websocket:
                 ws_logger.error(
                     f"Websocket[{self._idx}] unexpected error: {type(e).__name__}: {e}"
                 )
-                await asyncio.sleep(delay)
+                raise
 
     @task_wrapper(critical=True)
     async def _handle(self):
@@ -190,7 +190,7 @@ class Websocket:
             reconnect_count += 1
             
             if reconnect_count > max_reconnects:
-                sleep_duration = random.uniform(1500, 2100)  # 25–35 mins with jitter
+                sleep_duration = random.uniform(1500, 2100)  # 25-35 mins with jitter
                 logger.error(f"Websocket[{self._idx}] exceeded max reconnections, sleeping {sleep_duration:.0f}s")
                 await asyncio.sleep(sleep_duration)
                 reconnect_count = 0
@@ -212,7 +212,6 @@ class Websocket:
                     await self._handle_recv()
             except WebsocketClosed as exc:
                 if exc.received:
-                    # CHANGED: WARNING -> INFO (This is normal Twitch behavior)
                     ws_logger.info(
                         f"Websocket[{self._idx}] closed by server: {websocket.close_code}"
                     )
@@ -231,7 +230,6 @@ class Websocket:
                 self._topics_changed.set()
             
             self.set_status("Reconnecting")
-            # CHANGED: WARNING -> INFO
             ws_logger.info(f"Websocket[{self._idx}] reconnecting...")
             await asyncio.sleep(5)
 
@@ -255,7 +253,6 @@ class Websocket:
         
         removed = self._submitted - current
         if removed:
-            # Chunking unlisten requests (Safe size: 10, Delay: 0.1s)
             for topics_chunk in chunk(list(removed), 10):
                 topics_list = [str(t) for t in topics_chunk]
                 ws_logger.debug(f"Websocket[{self._idx}]: Unlistening from topics: {topics_list}")
@@ -265,7 +262,6 @@ class Websocket:
         
         added = current - self._submitted
         if added:
-            # Chunking listen requests (Safe size: 10, Delay: 0.1s)
             for topics_chunk in chunk(list(added), 10):
                 topics_list = [str(t) for t in topics_chunk]
                 ws_logger.debug(f"Websocket[{self._idx}]: Listening to topics: {topics_list}")
@@ -313,7 +309,7 @@ class Websocket:
         try:
             await self._gather_recv(messages, timeout=0.5)
         except asyncio.TimeoutError:
-            pass # No messages received, which is normal
+            pass
         
         for message in messages:
             msg_type = message["type"]
@@ -352,11 +348,11 @@ class Websocket:
             await ws.send_json(message, dumps=json_minify)
             ws_logger.debug(f"Websocket[{self._idx}] sent: {message}")
         except (aiohttp.ClientConnectionResetError, ConnectionResetError, aiohttp.ClientError):
-            # CHANGED: WARNING -> DEBUG (Auto-reconnect handles this, no need to spam logs)
             ws_logger.debug(f"Websocket[{self._idx}] failed to send (Connection Reset). Requesting reconnect.")
             self.request_reconnect()
         except Exception as e:
             ws_logger.error(f"Websocket[{self._idx}] send error: {e}")
+            raise
 
 
 class WebsocketPool:

@@ -32,12 +32,14 @@ class DiscordNotifier:
         self._login_alert_cooldown: timedelta = timedelta(hours=1)
         self._webhook_failures: int = 0
         self._max_webhook_failures: int = 5
+        self._webhook_backoff_until: datetime | None = None
+        self._session: aiohttp.ClientSession | None = None
         
     async def start(self):
         """Start the background notification task"""
         if self._notification_task is None or self._notification_task.done():
             self._notification_task = asyncio.create_task(self._notification_loop())
-            logger.info("🔔 Discord notification system started")
+            logger.info("Discord notification system started")
     
     async def stop(self):
         """Stop and cleanup"""
@@ -50,6 +52,16 @@ class DiscordNotifier:
         # Send final summary if there are pending drops
         if self._pending_drops:
             await self._send_summary()
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return a persistent Discord webhook session."""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=10)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
     
     async def _notification_loop(self):
         """Background task that sends periodic summaries and monitors login status"""
@@ -121,13 +133,13 @@ class DiscordNotifier:
         
         if logged_out:
             embed = {
-                "title": "âš ï¸ Twitch Login Session Lost",
+                "title": "Twitch Login Session Lost",
                 "description": (
                     "**Your Twitch session has been logged out!**\n\n"
                     "The miner cannot claim drops until you log back in.\n\n"
                     "**Action Required:**\n"
-                    "â€¢ Replace the `cookies.jar` file with a fresh one\n"
-                    "â€¢ Restart the container to re-authenticate\n\n"
+                    "- Replace the `cookies.jar` file with a fresh one\n"
+                    "- Restart the container to re-authenticate\n\n"
                     "**Next alert will be sent in 1 hour if issue persists.**"
                 ),
                 "color": 15158332,  # Red
@@ -136,7 +148,7 @@ class DiscordNotifier:
             }
         else:
             embed = {
-                "title": "âœ… Twitch Login Restored",
+                "title": "Twitch Login Restored",
                 "description": "Successfully logged back into Twitch. Drop mining has resumed.",
                 "color": 3066993,  # Green
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -178,7 +190,7 @@ class DiscordNotifier:
         time_range = self._get_time_range()
         
         description_parts = [
-            f"📊 **Summary Report** ({time_range})\n",
+            f"**Summary Report** ({time_range})\n",
             f"**{total_drops} drop{'s' if total_drops != 1 else ''} claimed** across **{len(campaigns_data)} campaign{'s' if len(campaigns_data) != 1 else ''}**\n"
         ]
         
@@ -191,16 +203,16 @@ class DiscordNotifier:
             
             description_parts.append(
                 f"\n**{game_name}** - {campaign_name}\n"
-                f"â””â”€ Progress: {progress} | Claimed: {len(drops)} drop{'s' if len(drops) != 1 else ''}"
+                f"Progress: {progress} | Claimed: {len(drops)} drop{'s' if len(drops) != 1 else ''}"
             )
             
             # List individual drops
             for drop, claim_time in drops:
                 time_str = claim_time.strftime("%H:%M UTC")
-                description_parts.append(f"   â€¢ {drop.rewards_text()} ({time_str})")
+                description_parts.append(f"   - {drop.rewards_text()} ({time_str})")
         
         embed = {
-            "title": "ðŸŽ Drops Mining Summary",
+            "title": "Drops Mining Summary",
             "description": "\n".join(description_parts),
             "color": 5793266,  # Twitch Purple
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -238,16 +250,16 @@ class DiscordNotifier:
             return False
         
         embed = {
-            "title": "âœ… Webhook Test Successful!",
+            "title": "Webhook Test Successful",
             "description": (
                 "Your Discord webhook is configured correctly.\n\n"
                 "**Notification Settings:**\n"
-                f"â€¢ Summary Interval: {self.twitch.settings.discord_summary_interval_minutes} minutes\n"
-                f"â€¢ Login Monitoring: Enabled (checks every 5 minutes)\n\n"
+                f"- Summary Interval: {self.twitch.settings.discord_summary_interval_minutes} minutes\n"
+                f"- Login Monitoring: Enabled (checks every 5 minutes)\n\n"
                 "You will receive:\n"
-                "â€¢ Periodic summaries of claimed drops\n"
-                "â€¢ Alerts when Twitch logs you out\n"
-                "â€¢ Confirmation when login is restored"
+                "- Periodic summaries of claimed drops\n"
+                "- Alerts when Twitch logs you out\n"
+                "- Confirmation when login is restored"
             ),
             "color": 3066993,  # Green
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -256,9 +268,9 @@ class DiscordNotifier:
         
         success = await self._send_webhook({"embeds": [embed]})
         if success:
-            logger.info("âœ… Test notification sent successfully")
+            logger.info("Test notification sent successfully")
         else:
-            logger.error("âŒ Test notification failed")
+            logger.error("Test notification failed")
         return success
     
     async def _send_webhook(self, payload: dict, max_retries: int = 3) -> bool:
@@ -271,71 +283,71 @@ class DiscordNotifier:
         if not webhook_url:
             return False
         
-        # Check if we've had too many failures
-        if self._webhook_failures >= self._max_webhook_failures:
-            logger.error(
-                f"Discord webhook has failed {self._webhook_failures} times. "
-                "Temporarily disabling notifications until next success."
+        now = datetime.now(timezone.utc)
+        if self._webhook_backoff_until and now < self._webhook_backoff_until:
+            logger.warning(
+                f"Discord webhook is cooling down until "
+                f"{self._webhook_backoff_until.isoformat()}"
             )
             return False
+        if self._webhook_backoff_until and now >= self._webhook_backoff_until:
+            logger.info("Retrying Discord webhook after cooldown")
+            self._webhook_backoff_until = None
         
         for attempt in range(max_retries):
             try:
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(webhook_url, json=payload) as response:
-                        # Success
-                        if response.status in (200, 204):
-                            # Reset failure counter on success
-                            if self._webhook_failures > 0:
-                                logger.info(
-                                    f"âœ… Discord webhook recovered after "
-                                    f"{self._webhook_failures} failures"
-                                )
-                                self._webhook_failures = 0
-                            logger.debug(f"Discord webhook sent successfully: {response.status}")
-                            return True
-                        
-                        # Rate limited
-                        elif response.status == 429:
-                            retry_after = int(response.headers.get('Retry-After', 5))
-                            logger.warning(
-                                f"Discord webhook rate limited. "
-                                f"Retrying after {retry_after} seconds..."
+                session = await self._get_session()
+                async with session.post(webhook_url, json=payload) as response:
+                    # Success
+                    if response.status in (200, 204):
+                        # Reset failure counter on success
+                        if self._webhook_failures > 0:
+                            logger.info(
+                                f"Discord webhook recovered after "
+                                f"{self._webhook_failures} failures"
                             )
-                            await asyncio.sleep(retry_after)
-                            continue
-                        
-                        # Client error (bad request, unauthorized, etc)
-                        elif 400 <= response.status < 500:
-                            response_text = await response.text()
-                            logger.error(
-                                f"Discord webhook client error {response.status}: "
-                                f"{response_text[:200]}"
-                            )
-                            self._webhook_failures += 1
-                            
-                            # Don't retry client errors (except rate limit)
-                            if response.status != 429:
-                                return False
-                        
-                        # Server error
-                        elif response.status >= 500:
-                            logger.warning(
-                                f"Discord webhook server error {response.status}. "
-                                f"Retrying (attempt {attempt + 1}/{max_retries})..."
-                            )
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                        
-                        else:
-                            response_text = await response.text()
-                            logger.error(
-                                f"Discord webhook unexpected status {response.status}: "
-                                f"{response_text[:200]}"
-                            )
-                            self._webhook_failures += 1
-                            return False
+                            self._webhook_failures = 0
+                        self._webhook_backoff_until = None
+                        logger.debug(f"Discord webhook sent successfully: {response.status}")
+                        return True
+
+                    # Rate limited
+                    elif response.status == 429:
+                        retry_after = int(response.headers.get('Retry-After', 5))
+                        logger.warning(
+                            f"Discord webhook rate limited. "
+                            f"Retrying after {retry_after} seconds..."
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                    # Client error (bad request, unauthorized, etc)
+                    elif 400 <= response.status < 500:
+                        response_text = await response.text()
+                        logger.error(
+                            f"Discord webhook client error {response.status}: "
+                            f"{response_text[:200]}"
+                        )
+                        self._record_webhook_failure()
+                        return False
+
+                    # Server error
+                    elif response.status >= 500:
+                        logger.warning(
+                            f"Discord webhook server error {response.status}. "
+                            f"Retrying (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+                    else:
+                        response_text = await response.text()
+                        logger.error(
+                            f"Discord webhook unexpected status {response.status}: "
+                            f"{response_text[:200]}"
+                        )
+                        self._record_webhook_failure()
+                        return False
                             
             except asyncio.TimeoutError:
                 logger.warning(
@@ -357,13 +369,25 @@ class DiscordNotifier:
                     f"Unexpected error sending Discord webhook: {e}",
                     exc_info=True
                 )
-                self._webhook_failures += 1
+                self._record_webhook_failure()
                 return False
         
         # All retries failed
-        self._webhook_failures += 1
+        self._record_webhook_failure()
         logger.error(
             f"Discord webhook failed after {max_retries} attempts "
             f"(total failures: {self._webhook_failures})"
         )
         return False
+
+    def _record_webhook_failure(self) -> None:
+        """Record a webhook failure and schedule a retry window when needed."""
+        self._webhook_failures += 1
+        if self._webhook_failures >= self._max_webhook_failures:
+            self._webhook_backoff_until = (
+                datetime.now(timezone.utc) + timedelta(minutes=15)
+            )
+            logger.error(
+                f"Discord webhook failed {self._webhook_failures} times. "
+                f"Cooling down until {self._webhook_backoff_until.isoformat()}."
+            )

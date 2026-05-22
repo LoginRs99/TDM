@@ -36,7 +36,7 @@ class HealthcheckWriter:
         try:
             if not self.healthcheck_file.exists():
                 self.update_healthy()
-                logger.info("✅ Healthcheck file initialized")
+                logger.info("Healthcheck file initialized")
             else:
                 # Read existing state
                 try:
@@ -44,26 +44,42 @@ class HealthcheckWriter:
                     parts = content.split(',')
                     if len(parts) >= 2:
                         self.failure_count = int(parts[1])
-                        logger.info(f"📊 Healthcheck file loaded (failures: {self.failure_count})")
+                        logger.info(f"Healthcheck file loaded (failures: {self.failure_count})")
                 except Exception as e:
-                    logger.warning(f"⚠️  Could not read existing healthcheck: {e}")
+                    logger.warning(f"Could not read existing healthcheck: {e}")
                     self.update_healthy()
         except Exception as e:
-            logger.error(f"❌ Failed to initialize healthcheck: {e}")
+            logger.error(f"Failed to initialize healthcheck: {e}")
     
     def update_healthy(self):
         """
         Mark application as healthy
         Resets failure count and clears error flag
         """
+        self.update_status(0)
+
+    def update_status(self, failure_count: int = 0, *, error: bool = False) -> None:
+        """
+        Write an explicit healthcheck status.
+
+        This is the canonical writer path used by the miner. The Docker
+        healthcheck reads the same "timestamp,failure_count[,ERROR]" format.
+        """
         try:
             timestamp = int(time())
-            self.healthcheck_file.write_text(f"{timestamp},0")
-            self.failure_count = 0
+            self.failure_count = min(max(failure_count, 0), self.max_failures)
+            status = f"{timestamp},{self.failure_count}"
+            if error:
+                status += ",ERROR"
+            self.healthcheck_file.write_text(status)
             self.last_update = timestamp
-            logger.debug("✅ Healthcheck: Healthy")
+            logger.debug(
+                "Healthcheck updated: failures=%s, error=%s",
+                self.failure_count,
+                error,
+            )
         except Exception as e:
-            logger.error(f"❌ Failed to update healthcheck (healthy): {e}")
+            logger.error(f"Failed to update healthcheck status: {e}")
     
     def update_error(self, error_msg: str = ""):
         """
@@ -74,17 +90,15 @@ class HealthcheckWriter:
             error_msg: Optional error message for logging
         """
         try:
-            timestamp = int(time())
             self.failure_count = min(self.failure_count + 1, self.max_failures)
-            self.healthcheck_file.write_text(f"{timestamp},{self.failure_count},ERROR")
-            self.last_update = timestamp
+            self.update_status(self.failure_count, error=True)
             
             if error_msg:
-                logger.warning(f"⚠️  Healthcheck: Error state - {error_msg}")
+                logger.warning(f"Healthcheck error state: {error_msg}")
             else:
-                logger.warning(f"⚠️  Healthcheck: Error state (failures: {self.failure_count})")
+                logger.warning(f"Healthcheck error state (failures: {self.failure_count})")
         except Exception as e:
-            logger.error(f"❌ Failed to update healthcheck (error): {e}")
+            logger.error(f"Failed to update healthcheck (error): {e}")
     
     def update_failure(self):
         """
@@ -92,13 +106,11 @@ class HealthcheckWriter:
         Used for recoverable issues
         """
         try:
-            timestamp = int(time())
             self.failure_count = min(self.failure_count + 1, self.max_failures)
-            self.healthcheck_file.write_text(f"{timestamp},{self.failure_count}")
-            self.last_update = timestamp
-            logger.debug(f"⚠️  Healthcheck: Failure count {self.failure_count}/{self.max_failures}")
+            self.update_status(self.failure_count)
+            logger.debug(f"Healthcheck failure count {self.failure_count}/{self.max_failures}")
         except Exception as e:
-            logger.error(f"❌ Failed to update healthcheck (failure): {e}")
+            logger.error(f"Failed to update healthcheck (failure): {e}")
     
     def update_recovering(self):
         """
@@ -106,15 +118,13 @@ class HealthcheckWriter:
         Maintains current failure count but updates timestamp
         """
         try:
-            timestamp = int(time())
             # Keep existing failure count but update timestamp
             if self.failure_count > 0:
                 self.failure_count = max(0, self.failure_count - 1)
-            self.healthcheck_file.write_text(f"{timestamp},{self.failure_count}")
-            self.last_update = timestamp
-            logger.debug(f"🔄 Healthcheck: Recovering (failures: {self.failure_count})")
+            self.update_status(self.failure_count)
+            logger.debug(f"Healthcheck recovering (failures: {self.failure_count})")
         except Exception as e:
-            logger.error(f"❌ Failed to update healthcheck (recovering): {e}")
+            logger.error(f"Failed to update healthcheck (recovering): {e}")
     
     def heartbeat(self):
         """
@@ -134,7 +144,7 @@ class HealthcheckWriter:
                     self.healthcheck_file.write_text(f"{timestamp},{self.failure_count}")
                     self.last_update = timestamp
         except Exception as e:
-            logger.error(f"❌ Failed to update healthcheck (heartbeat): {e}")
+            logger.error(f"Failed to update healthcheck (heartbeat): {e}")
     
     def get_status(self) -> dict:
         """

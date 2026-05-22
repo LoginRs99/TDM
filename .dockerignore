@@ -5,6 +5,7 @@
 .gitignore
 .github/
 .vscode/
+.env
 
 # Docker-specific files that shouldn't be in the image context
 Dockerfile

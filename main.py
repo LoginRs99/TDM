@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
 from multiprocessing import freeze_support
 
 if __name__ == "__main__":
-    print(f"{datetime.now().strftime('%Y-%m-%d %X')}: Starting: Twitch Drops Miner (Headless)")
     freeze_support()
     
     import sys
@@ -16,7 +14,7 @@ if __name__ == "__main__":
     import warnings
     import traceback
     from functools import partial
-    from typing import NoReturn, TYPE_CHECKING
+    from typing import TYPE_CHECKING
     import truststore
     truststore.inject_into_ssl()
 
@@ -27,7 +25,7 @@ if __name__ == "__main__":
     from exceptions import CaptchaRequired, LoginException
     from utils import lock_file
     from config_validator import startup_validation
-    from constants import LOGGING_LEVELS, SELF_PATH, FILE_FORMATTER, LOG_PATH, LOCK_PATH, WORKING_DIR
+    from constants import SELF_PATH, FILE_FORMATTER, LOG_PATH, LOCK_PATH, WORKING_DIR
 
     if TYPE_CHECKING:
         from _typeshed import SupportsWrite
@@ -68,6 +66,7 @@ if __name__ == "__main__":
     parser.add_argument("--version", action="version", version=f"v{__version__}")
     parser.add_argument("-v", dest="_verbose", action="count", default=0)
     parser.add_argument("--log", action="store_true")
+    parser.add_argument("--dump", action="store_true")
     parser.add_argument(
         "--debug-ws", dest="_debug_ws", action="store_true", help=argparse.SUPPRESS
     )
@@ -75,8 +74,6 @@ if __name__ == "__main__":
         "--debug-gql", dest="_debug_gql", action="store_true", help=argparse.SUPPRESS
     )
     args = parser.parse_args(namespace=ParsedArgs())
-    
-    args.dump = False
     
     try:
         settings = Settings(args)
@@ -189,14 +186,10 @@ if __name__ == "__main__":
         client.metrics = metrics
         
         loop = asyncio.get_running_loop()
-        shutdown_event = asyncio.Event()
-        
-        # --- IMPROVED SIGNAL HANDLING FOR DOCKER ---
         def signal_handler(sig):
             sig_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
-            logger.info(f"🛑 Received signal {sig_name}, initiating graceful shutdown...")
-            shutdown_event.set()
-            asyncio.create_task(client.close())
+            logger.info(f"Received signal {sig_name}, initiating graceful shutdown...")
+            client.close()
 
         # Register signals for graceful Docker shutdown
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -208,13 +201,13 @@ if __name__ == "__main__":
         # -------------------------------------------
         
         try:
-            logger.info("ðŸš€ Starting Twitch Drops Miner...")
+            logger.info("Starting Twitch Drops Miner...")
             await client.run()
         except CaptchaRequired:
             exit_status = 1
             client.prevent_close()
             logger.error(
-                "âŒ CAPTCHA Required\n"
+                "CAPTCHA required\n"
                 "Your login attempt was denied by CAPTCHA.\n"
                 "Please wait 12+ hours before trying again."
             )
@@ -222,7 +215,7 @@ if __name__ == "__main__":
             exit_status = 1
             client.prevent_close()
             logger.error(
-                f"âŒ Login Failed\n"
+                f"Login failed\n"
                 f"Reason: {e}\n\n"
                 f"Troubleshooting:\n"
                 f"1. Ensure cookies.jar exists and is readable\n"
@@ -231,14 +224,14 @@ if __name__ == "__main__":
                 f"4. Try generating a fresh cookies.jar"
             )
         except KeyboardInterrupt:
-            logger.info("âŒ¨ï¸  Keyboard interrupt received")
+            logger.info("Keyboard interrupt received")
         except Exception as exc:
             exit_status = 1
             client.prevent_close()
-            logger.error(f"âŒ Fatal error:\n{traceback.format_exc()}")
+            logger.error(f"Fatal error:\n{traceback.format_exc()}")
             metrics.record_error("fatal_exception")
         finally:
-            logger.info("🔄 Shutting down gracefully...")
+            logger.info("Shutting down gracefully...")
             
             # Print metrics summary before shutdown
             if metrics:
@@ -252,7 +245,7 @@ if __name__ == "__main__":
         client.save(force=True)
         
         logger.info("=" * 60)
-        logger.info(f"👋 Twitch Drops Miner stopped. Exit code: {exit_status}")
+        logger.info(f"Twitch Drops Miner stopped. Exit code: {exit_status}")
         logger.info("=" * 60)
         
         sys.exit(exit_status)
@@ -261,18 +254,18 @@ if __name__ == "__main__":
         # Lock file check
         success, file = lock_file(LOCK_PATH)
         if not success:
-            print("âŒ Another instance is already running!")
+            print("Another instance is already running!")
             print(f"Lock file exists at: {LOCK_PATH}")
             print("If you're sure no other instance is running, delete the lock file.")
             sys.exit(3)
         
-        print(f"âœ… Lock file acquired: {LOCK_PATH}")
+        print(f"Lock file acquired: {LOCK_PATH}")
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nâŒ¨ï¸  Interrupted by user")
+        print("\nInterrupted by user")
         sys.exit(130)
     except Exception as e:
-        print(f"âŒ Startup error: {e}")
+        print(f"Startup error: {e}")
         traceback.print_exc()
         sys.exit(1)
     finally:

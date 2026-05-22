@@ -19,7 +19,6 @@ from constants import CALL, GQL_QUERIES, ONLINE_DELAY, URLType, GQLQuery
 
 if TYPE_CHECKING:
     from twitch import Twitch
-    # from gui import ChannelList
     from constants import JsonType, GQLPersistedQuery
 
 
@@ -444,7 +443,7 @@ class Channel:
             self._twitch.on_channel_update(self, old_stream, self._stream)
             needs_display = False  # calling on_channel_update always does a display at the end
 
-    # NOTE: Kept as fallback — not called by anything currently.
+    # NOTE: Kept as fallback; not called by the current watch loop.
     async def _send_watch_spade(self) -> bool:
         stream = self._stream  # Capture reference atomically to prevent race condition
         if stream is None:
@@ -460,8 +459,7 @@ class Channel:
                 if response.status != 204:
                     logger.debug(f"Spade request failed with status: {response.status}")
                 return response.status == 204
-        except Exception as e:
-            logger.error(f"Unexpected error in _send_watch_spade for {self.name}: {e}")
+        except RequestException:
             return False
 
     async def send_watch(self) -> bool:
@@ -473,7 +471,4 @@ class Channel:
             watch_response = await self._twitch.gql_request(stream._gql_payload)
             return watch_response["data"]["sendSpadeEvents"]["statusCode"] == 204
         except RequestException:
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error in send_watch for {self.name}: {e}")
             return False

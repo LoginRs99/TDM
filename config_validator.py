@@ -5,8 +5,9 @@ Validates required files, settings, and environment before startup
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
+
+from constants import COOKIES_PATH, LOG_PATH, SETTINGS_PATH
 
 if TYPE_CHECKING:
     from settings import Settings
@@ -24,11 +25,11 @@ class ConfigValidator:
     def validate_required_files(self) -> bool:
         """Check that all required files exist"""
         all_ok = True
-        if not Path("cookies.jar").exists():
-            self.issues.append("❌ Missing cookies.jar - Twitch authentication cookies (CRITICAL)")
+        if not COOKIES_PATH.exists():
+            self.issues.append(f"Missing {COOKIES_PATH.name} - Twitch authentication cookies (critical)")
             all_ok = False
-        if not Path("settings.json").exists():
-            self.warnings.append("⚠️  Missing settings.json - will be created with defaults")
+        if not SETTINGS_PATH.exists():
+            self.warnings.append(f"Missing {SETTINGS_PATH.name} - will be created with defaults")
         return all_ok
 
     def validate_cookies_file(self) -> bool:
@@ -37,14 +38,14 @@ class ConfigValidator:
         IMPORTANT: cookies.jar is a BINARY file (SQLite / pickle / Netscape format).
         Never open it as text ('r' mode) — always use binary ('rb') mode.
         """
-        cookies_path = Path("cookies.jar")
+        cookies_path = COOKIES_PATH
 
         if not cookies_path.exists():
             return False
 
         file_size = cookies_path.stat().st_size
         if file_size < 50:
-            self.issues.append("❌ cookies.jar is too small (likely empty or corrupted)")
+            self.issues.append(f"{COOKIES_PATH.name} is too small (likely empty or corrupted)")
             return False
 
         # Read as BINARY — do NOT attempt UTF-8 decode
@@ -52,62 +53,28 @@ class ConfigValidator:
             with open(cookies_path, 'rb') as f:
                 header = f.read(16)
             if len(header) == 0:
-                self.issues.append("❌ cookies.jar is empty")
+                self.issues.append(f"{COOKIES_PATH.name} is empty")
                 return False
         except Exception as e:
-            self.issues.append(f"❌ Cannot access cookies.jar: {e}")
+            self.issues.append(f"Cannot access {COOKIES_PATH.name}: {e}")
             return False
 
-        logger.debug(f"✅ cookies.jar validated ({file_size} bytes)")
+        logger.debug(f"{COOKIES_PATH.name} validated ({file_size} bytes)")
         return True
 
     def validate_settings_file(self, settings: Settings) -> bool:
-        """Validate settings.json configuration"""
-        all_ok = True
-
-        webhook = settings.discord_webhook_url
-        if webhook and not webhook.startswith('https://discord.com/api/webhooks/'):
-            self.warnings.append(
-                "⚠️  Discord webhook URL looks invalid "
-                "(expected: https://discord.com/api/webhooks/...)"
-            )
-
-        if settings.discord_summary_interval_minutes < 1:
-            self.warnings.append("⚠️  Discord summary interval is less than 1 minute")
-
-        if settings.maintenance_interval_minutes < 5:
-            self.warnings.append("⚠️  Maintenance interval is very low (< 5 minutes)")
-
-        if settings.stale_stream_timeout_minutes < 3:
-            self.warnings.append("⚠️  Stale stream timeout is very low (< 3 minutes)")
-
-        if settings.priority_mode.value not in [0, 1, 2, 3]:
-            self.issues.append(f"❌ Invalid priority mode: {settings.priority_mode.value}")
-            all_ok = False
-
-        total_weight = (
-            settings.priority_weight_preference +
-            settings.priority_weight_urgency
-        )
-        if abs(total_weight - 100) > 5:
-            self.warnings.append(
-                f"⚠️  Priority weights don't sum to 100% "
-                f"(preference={settings.priority_weight_preference}%, "
-                f"urgency={settings.priority_weight_urgency}%, total={total_weight}%)"
-            )
-
-        return all_ok
+        """Settings value validation lives in Settings; avoid duplicating policy here."""
+        return True
 
     def validate_directories(self) -> bool:
         """Ensure required directories exist and are writable"""
         all_ok = True
-        for dir_path in ["logs", "."]:
-            path = Path(dir_path)
-            if not path.exists() and dir_path != ".":
+        for path in [LOG_PATH.parent, SETTINGS_PATH.parent]:
+            if not path.exists():
                 try:
                     path.mkdir(parents=True, exist_ok=True)
                 except Exception as e:
-                    self.issues.append(f"❌ Cannot create {dir_path} directory: {e}")
+                    self.issues.append(f"Cannot create {path} directory: {e}")
                     all_ok = False
                     continue
             test_file = path / f".write_test_{id(self)}"
@@ -115,7 +82,7 @@ class ConfigValidator:
                 test_file.touch()
                 test_file.unlink()
             except Exception as e:
-                self.warnings.append(f"⚠️  Directory {dir_path} may not be writable: {e}")
+                self.warnings.append(f"Directory {path} may not be writable: {e}")
         return all_ok
 
     def validate_environment(self) -> bool:
@@ -123,12 +90,12 @@ class ConfigValidator:
         import os
         tz = os.getenv('TZ', 'UTC')
         if tz != 'UTC':
-            self.warnings.append(f"⚠️  Timezone is {tz} (UTC recommended)")
+            self.warnings.append(f"Timezone is {tz} (UTC recommended)")
         return True
 
     def validate_all(self, settings: Settings | None = None) -> bool:
         """Run all validation checks"""
-        logger.info("🔍 Running configuration validation...")
+        logger.info("Running configuration validation...")
 
         all_ok = True
         if not self.validate_required_files():
@@ -142,21 +109,21 @@ class ConfigValidator:
         self.validate_environment()
 
         if self.issues:
-            logger.error("❌ Critical configuration issues detected:")
+            logger.error("Critical configuration issues detected:")
             for issue in self.issues:
                 logger.error(f"   {issue}")
 
         if self.warnings:
-            logger.warning("⚠️  Configuration warnings:")
+            logger.warning("Configuration warnings:")
             for warning in self.warnings:
                 logger.warning(f"   {warning}")
 
         if all_ok and not self.warnings:
-            logger.info("✅ Configuration validation passed - all checks OK")
+            logger.info("Configuration validation passed - all checks OK")
         elif all_ok:
-            logger.info("✅ Configuration validation passed (with warnings)")
+            logger.info("Configuration validation passed (with warnings)")
         else:
-            logger.error("❌ Configuration validation FAILED")
+            logger.error("Configuration validation FAILED")
 
         return all_ok
 
@@ -164,15 +131,15 @@ class ConfigValidator:
         """Get a formatted validation report"""
         lines = ["=== Configuration Validation Report ==="]
         if self.issues:
-            lines.append("\n❌ CRITICAL ISSUES:")
+            lines.append("\nCRITICAL ISSUES:")
             for issue in self.issues:
                 lines.append(f"   {issue}")
         if self.warnings:
-            lines.append("\n⚠️  WARNINGS:")
+            lines.append("\nWARNINGS:")
             for warning in self.warnings:
                 lines.append(f"   {warning}")
         if not self.issues and not self.warnings:
-            lines.append("\n✅ All checks passed successfully")
+            lines.append("\nAll checks passed successfully")
         return "\n".join(lines)
 
 

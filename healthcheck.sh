@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 Healthcheck script that monitors both application status and disk space.
+
+Optional manual helper only. Docker runtime healthchecks use healthcheck.py.
 """
 import sys
 import shutil

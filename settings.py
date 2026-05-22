@@ -105,10 +105,10 @@ class Settings:
             webhook = webhook.strip()
             if webhook.startswith('https://discord.com/api/webhooks/'):
                 self._settings['discord_webhook_url'] = webhook
-                logger.info("âœ… Discord webhook URL loaded from environment")
+                logger.info("Discord webhook URL loaded from environment")
             else:
                 logger.warning(
-                    "âš ï¸  DISCORD_WEBHOOK_URL doesn't look valid - ignoring. "
+                    "DISCORD_WEBHOOK_URL doesn't look valid - ignoring. "
                     "Should start with: https://discord.com/api/webhooks/"
                 )
         
@@ -118,16 +118,16 @@ class Settings:
                 interval_int = int(interval)
                 if 1 <= interval_int <= 1440:  # 1 minute to 24 hours
                     self._settings['discord_summary_interval_minutes'] = interval_int
-                    logger.info(f"âœ… Discord summary interval set to {interval_int} minutes")
+                    logger.info(f"Discord summary interval set to {interval_int} minutes")
                 else:
                     logger.warning(
-                        f"âš ï¸  DISCORD_SUMMARY_INTERVAL out of range ({interval_int}). "
+                        f"DISCORD_SUMMARY_INTERVAL out of range ({interval_int}). "
                         f"Must be 1-1440 minutes. Using default: "
                         f"{default_settings['discord_summary_interval_minutes']}"
                     )
             except ValueError:
                 logger.warning(
-                    f"âš ï¸  DISCORD_SUMMARY_INTERVAL is not a valid integer: '{interval}'. "
+                    f"DISCORD_SUMMARY_INTERVAL is not a valid integer: '{interval}'. "
                     f"Using default: {default_settings['discord_summary_interval_minutes']}"
                 )
         
@@ -137,10 +137,10 @@ class Settings:
             valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
             if log_level in valid_levels:
                 self._settings['logging_level'] = log_level
-                logger.info(f"âœ… Logging level set to {log_level}")
+                logger.info(f"Logging level set to {log_level}")
             else:
                 logger.warning(
-                    f"âš ï¸  Invalid LOGGING_LEVEL: '{log_level}'. "
+                    f"Invalid LOGGING_LEVEL: '{log_level}'. "
                     f"Must be one of: {', '.join(valid_levels)}. "
                     f"Using default: {default_settings['logging_level']}"
                 )
@@ -151,13 +151,13 @@ class Settings:
                 maint_int = int(maint)
                 if 5 <= maint_int <= 120:  # 5 minutes to 2 hours
                     self._settings['maintenance_interval_minutes'] = maint_int
-                    logger.info(f"âœ… Maintenance interval set to {maint_int} minutes")
+                    logger.info(f"Maintenance interval set to {maint_int} minutes")
                 else:
                     logger.warning(
-                        f"âš ï¸  MAINTENANCE_INTERVAL_MINUTES out of range: {maint_int}"
+                        f"MAINTENANCE_INTERVAL_MINUTES out of range: {maint_int}"
                     )
             except ValueError:
-                logger.warning(f"âš ï¸  Invalid MAINTENANCE_INTERVAL_MINUTES: '{maint}'")
+                logger.warning(f"Invalid MAINTENANCE_INTERVAL_MINUTES: '{maint}'")
         
         # Priority Mode
         if priority_mode := os.getenv('PRIORITY_MODE'):
@@ -173,9 +173,9 @@ class Settings:
             }
             if priority_mode in mode_map:
                 self._settings['priority_mode'] = mode_map[priority_mode]
-                logger.info(f"âœ… Priority mode set to {priority_mode}")
+                logger.info(f"Priority mode set to {priority_mode}")
             else:
-                logger.warning(f"âš ï¸  Invalid PRIORITY_MODE: '{priority_mode}'")
+                logger.warning(f"Invalid PRIORITY_MODE: '{priority_mode}'")
     
     def _validate_settings(self):
         """Validate settings values are in acceptable ranges"""
@@ -187,7 +187,7 @@ class Settings:
         )
         if abs(total_weight - 100) > 10:  # Allow 10% tolerance
             logger.warning(
-                f"âš ï¸  Priority weights should sum to ~100% "
+                f"Priority weights should sum to ~100% "
                 f"(current: preference={self._settings['priority_weight_preference']}%, "
                 f"urgency={self._settings['priority_weight_urgency']}%, "
                 f"total={total_weight}%)"
@@ -196,20 +196,20 @@ class Settings:
         # Validate intervals are positive
         if self._settings['maintenance_interval_minutes'] < 5:
             logger.warning(
-                "âš ï¸  Maintenance interval is very low (< 5 minutes). "
+                "Maintenance interval is very low (< 5 minutes). "
                 "This may cause excessive API calls."
             )
         
         if self._settings['stale_stream_timeout_minutes'] < 3:
             logger.warning(
-                "âš ï¸  Stale stream timeout is very low (< 3 minutes). "
+                "Stale stream timeout is very low (< 3 minutes). "
                 "This may cause premature channel switches."
             )
         
         # Validate connection quality
         if self._settings['connection_quality'] not in [1, 2, 3]:
             logger.warning(
-                f"âš ï¸  Invalid connection_quality: {self._settings['connection_quality']}. "
+                f"Invalid connection_quality: {self._settings['connection_quality']}. "
                 f"Should be 1 (low), 2 (medium), or 3 (high). Using 1."
             )
             self._settings['connection_quality'] = 1
@@ -247,22 +247,22 @@ class Settings:
             try:
                 json_save(SETTINGS_PATH, self._settings, sort=True)
                 self._altered = False
-                logger.debug("💾 Settings saved to disk")
+                logger.debug("Settings saved to disk")
             except OSError as e:
                 if self._altered:
                     logger.warning(
-                        f"âš ï¸  Settings changed but could not be saved "
+                        f"Settings changed but could not be saved "
                         f"(Read-Only filesystem?): {e}"
                     )
                 else:
                     logger.debug(f"Skipping settings save: {e}")
             except Exception as e:
-                logger.error(f"âŒ Failed to save settings: {e}")
+                logger.error(f"Failed to save settings: {e}")
     
     def get_summary(self) -> str:
         """Get a human-readable summary of current settings"""
         lines = [
-            "âš™ï¸  === Current Settings ===",
+            "=== Current Settings ===",
             f"Priority Mode: {self.priority_mode.name}",
             f"Priority Games: {len(self.priority)} configured",
             f"Excluded Games: {len(self.exclude)} configured",
@@ -272,7 +272,7 @@ class Settings:
         
         if self.discord_webhook_url:
             lines.append(
-                f"  â””â”€ Summary Interval: {self.discord_summary_interval_minutes} minutes"
+                f"  Summary Interval: {self.discord_summary_interval_minutes} minutes"
             )
         
         lines.extend([

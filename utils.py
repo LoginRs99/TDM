@@ -402,5 +402,5 @@ class Game:
         slug_text = re.sub(r'-{2,}', '-', slug_text.strip('-'))
         return slug_text
 
-    def is_special_event(self) -> bool:
+    def is_special_events(self) -> bool:
         return self.id == self.SPECIAL_EVENTS_GAME_ID

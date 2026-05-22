@@ -23,6 +23,7 @@ from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
 from discord_notifier import DiscordNotifier
+from healthcheck_writer import get_healthcheck_writer
 
 from exceptions import (
     ExitRequest,
@@ -189,6 +190,7 @@ class Twitch:
         self._watching_restart = asyncio.Event()
         self.websocket = WebsocketPool(self)
         self.discord = DiscordNotifier(self)
+        self.healthcheck = get_healthcheck_writer()
         self._mnt_task: asyncio.Task[None] | None = None
         self._health_task: asyncio.Task[None] | None = None
         self._last_progress_timestamp: float = 0
@@ -266,7 +268,10 @@ class Twitch:
         # Only save watch stats if enabled
         if self.settings.enable_watch_stats and self._watch_stats:
             self._save_watch_stats()
-            logger.info(f"📊 Watch stats saved: {self._watch_stats['successful_watches']} successful, {self._watch_stats['failed_watches']} failed")
+            logger.info(
+                f"Watch stats saved: {self._watch_stats['successful_watches']} successful, "
+                f"{self._watch_stats['failed_watches']} failed"
+            )
         
         if self._session:
             try:
@@ -311,13 +316,7 @@ class Twitch:
         self.settings.save(force=force)
         
     def update_healthcheck(self, *, error: bool = False) -> None:
-        try:
-            with open('healthcheck.timestamp', 'w') as f:
-                status = f"{int(time())},{self._consecutive_gql_failures}"
-                if error: status += ",ERROR"
-                f.write(status)
-        except Exception as e:
-            logger.debug(f"Failed to update healthcheck: {e}")
+        self.healthcheck.update_status(self._consecutive_gql_failures, error=error)
         
     def get_balanced_priority(self, channel: Channel) -> float:
         """
@@ -467,7 +466,7 @@ class Twitch:
         auth_state = await self.get_auth()
         # --- ADDED: Configuration Summary ---
         logger.info(
-            f"⚠️️ Configuration: Mode={self.settings.priority_mode.name} | "
+            f"Configuration: Mode={self.settings.priority_mode.name} | "
             f"Priority Games={len(self.settings.priority)} | "
             f"Excluded={len(self.settings.exclude)}"
         )
@@ -499,7 +498,7 @@ class Twitch:
                     seconds_until = (min(upcoming) - now).total_seconds()
                     if 0 < seconds_until < 900:
                         next_start = seconds_until + 10  # +10s buffer
-                        logger.info(f"⏳ Next campaign starts in {int(next_start/60)} min. Sleeping until then.")
+                        logger.info(f"Next campaign starts in {int(next_start/60)} min. Sleeping until then.")
                     
                 logger.info(f"State: IDLE. Waiting {int(next_start)}s or for event.")
                 self.stop_watching()
@@ -526,12 +525,15 @@ class Twitch:
                     if not campaign.upcoming:
                         for drop in campaign.drops:
                             if drop.can_claim:
-                                if await drop.claim():
+                                claim_success = await drop.claim()
+                                if metrics := getattr(self, "metrics", None):
+                                    metrics.record_drop(claim_success, drop.rewards_text())
+                                if claim_success:
                                     self.discord.add_drop(drop)
                                     claims_made += 1
                 
                 if claims_made > 0:
-                    logger.info(f"✅ Claimed {claims_made} drop(s)")
+                    logger.info(f"Claimed {claims_made} drop(s)")
                 
                 # Use improved campaign selection
                 self.wanted_games.clear()
@@ -544,7 +546,7 @@ class Twitch:
                         self.wanted_games.append(campaign.game)
                 
                 if self.wanted_games:
-                    logger.info(f"📋 Selected games to farm: {[g.name for g in self.wanted_games[:5]]}")
+                    logger.info(f"Selected games to farm: {[g.name for g in self.wanted_games[:5]]}")
                     if len(self.wanted_games) > 5:
                         logger.info(f"   ... and {len(self.wanted_games) - 5} more")
                 else:
@@ -642,7 +644,7 @@ class Twitch:
             if self._last_progress_timestamp > 0:
                 timeout = getattr(self.settings, 'stale_stream_timeout_minutes', 5) * 60
                 if time() - self._last_progress_timestamp > timeout:
-                    logger.warning(f"❌ No drop progress on '{channel.name}' for {timeout/60} mins. Forcing switch.")
+                    logger.warning(f"No drop progress on '{channel.name}' for {timeout/60} mins. Forcing switch.")
                     self._last_progress_timestamp = 0
                     self.change_state(State.CHANNEL_SWITCH)
                     await asyncio.sleep(5)
@@ -652,16 +654,18 @@ class Twitch:
             
             # Send watch with fallback
             watch_success = await channel.send_watch()
+            if metrics := getattr(self, "metrics", None):
+                metrics.record_watch_attempt(watch_success)
             self._update_watch_stats(watch_success, channel)
 
             if watch_success:
-                logger.debug(f"✔ Watch sent to {channel.name}")
+                logger.debug(f"Watch sent to {channel.name}")
                 # Clear blacklist on success
                 if channel.id in self._channel_blacklist:
                     del self._channel_blacklist[channel.id]
-                    logger.info(f"✅ Removed {channel.name} from blacklist (now working)")
+                    logger.info(f"Removed {channel.name} from blacklist (now working)")
             else:
-                logger.warning(f"⚠️ Watch failed on {channel.name}")
+                logger.warning(f"Watch failed on {channel.name}")
                 
                 # Blacklist logic
                 self._channel_blacklist[channel.id] = self._channel_blacklist.get(channel.id, 0) + 1
@@ -669,7 +673,7 @@ class Twitch:
                 
                 if fail_count >= 5:
                     logger.error(
-                        f"⏭ Blacklisting {channel.name} after {fail_count} failures. "
+                        f"Blacklisting {channel.name} after {fail_count} failures. "
                         f"Switching to different channel..."
                     )
                     self._last_progress_timestamp = 0
@@ -714,20 +718,22 @@ class Twitch:
                             if len(self._watch_stats['progress_intervals']) > 100:
                                 self._watch_stats['progress_intervals'] = self._watch_stats['progress_intervals'][-100:]
                         
-                        logger.info(f"📊 Progress: {gql_drop.name} -> {new_minutes}/{gql_drop.required_minutes} min (+{progress_gain})")
+                        if metrics := getattr(self, "metrics", None):
+                            metrics.record_stream_watch(channel.name, progress_gain)
+                        logger.info(f"Progress: {gql_drop.name} -> {new_minutes}/{gql_drop.required_minutes} min (+{progress_gain})")
                     
                     # Validation check
                     time_since_progress = time() - self._last_progress_timestamp if self._last_progress_timestamp > 0 else 0
                     if time_since_progress > 240 and (time() - self._last_validation_time) > 300:
                         self._last_validation_time = time()
-                        logger.info(f"⏱️ No progress for {time_since_progress:.0f}s, running validation...")
+                        logger.info(f"No progress for {time_since_progress:.0f}s, running validation...")
                         
                         if not await self.validate_watch_progress(channel):
                             self._validation_failures += 1
-                            logger.error(f"❌ Validation failed {self._validation_failures} time(s)")
+                            logger.error(f"Validation failed {self._validation_failures} time(s)")
                             
                             if self._validation_failures >= 3:
-                                logger.error(f"🔧 Multiple validation failures, switching channel...")
+                                logger.error("Multiple validation failures, switching channel...")
                                 self._validation_failures = 0
                                 self._last_progress_timestamp = 0
                                 self.change_state(State.CHANNEL_SWITCH)
@@ -735,7 +741,7 @@ class Twitch:
                         
                 elif (active_campaign := self.get_active_campaign(channel)):
                     active_campaign.bump_minutes(channel)
-                    logger.debug(f"⏱️ Bumped minutes for {active_campaign.name}")
+                    logger.debug(f"Bumped minutes for {active_campaign.name}")
                     
             except GQLException as e:
                 logger.warning(f"GQL error during progress check: {e}")
@@ -748,6 +754,8 @@ class Twitch:
     async def _health_check_loop(self) -> NoReturn:
         while True:
             self.update_healthcheck()
+            if metrics := getattr(self, "metrics", None):
+                metrics.heartbeat()
             await asyncio.sleep(30)
 
     @task_wrapper(critical=True)
@@ -771,7 +779,7 @@ class Twitch:
         # Check blacklist
         if channel.id in self._channel_blacklist:
             if self._channel_blacklist[channel.id] >= 3:
-                logger.debug(f"⏭ Skipping blacklisted channel {channel.name} (failures)")
+                logger.debug(f"Skipping blacklisted channel {channel.name} (failures)")
                 return False
 
         if not channel.online or not channel.drops_enabled: return False
@@ -792,10 +800,10 @@ class Twitch:
         if current_campaign:
             first_drop = current_campaign.first_drop
             if first_drop and first_drop.can_claim:
-                logger.debug(f"🔒 Lock-in: Drop ready to claim on {wc.name}")
+                logger.debug(f"Lock-in: Drop ready to claim on {wc.name}")
                 return False
             if first_drop and 0 < first_drop.remaining_minutes <= 5:
-                logger.debug(f"🔒 Lock-in: Only {first_drop.remaining_minutes} min left")
+                logger.debug(f"Lock-in: Only {first_drop.remaining_minutes} min left")
                 return False
 
         p_candidate = self.get_priority(channel)
@@ -818,7 +826,7 @@ class Twitch:
     def on_channel_update(self, channel: Channel, stream_before: Stream | None, stream_after: Stream | None):
         if stream_before is None and stream_after is not None:
             if channel.drops_enabled and channel.game in self.wanted_games:
-                logger.info(f"⚡ Priority channel {channel.name} came online with drops for {channel.game.name}")
+                logger.info(f"Priority channel {channel.name} came online with drops for {channel.game.name}")
                 if (datetime.now(timezone.utc) - self._last_inventory_fetch).total_seconds() > 30:
                     logger.info("Quick inventory refresh triggered by priority channel")
                     asyncio.create_task(self._quick_inventory_check())
@@ -850,7 +858,11 @@ class Twitch:
         
         if msg_type == "drop-claim":
             drop.update_claim(data["drop_instance_id"])
-            if await drop.claim(): self.discord.add_drop(drop)
+            claim_success = await drop.claim()
+            if metrics := getattr(self, "metrics", None):
+                metrics.record_drop(claim_success, drop.rewards_text())
+            if claim_success:
+                self.discord.add_drop(drop)
             
             await asyncio.sleep(add_jitter(4, 0.25))
             if drop.campaign.can_earn(self.watching_channel.get_with_default(None)): self.restart_watching()
@@ -876,7 +888,7 @@ class Twitch:
 
             # Check if the notification type matches our list
             if data.get("type") in trigger_types:
-                logger.info(f"🔔 Notification received: {data.get('type')}. Syncing inventory.")
+                logger.info(f"Notification received: {data.get('type')}. Syncing inventory.")
                 self.change_state(State.INVENTORY_FETCH)
                 
                 # Ack/Delete the notification to clean up the UI
@@ -1010,7 +1022,7 @@ class Twitch:
         logger.info("Fetching inventory and campaigns...")
         
         if self._channel_blacklist:
-            logger.info(f"🔧 Clearing {len(self._channel_blacklist)} blacklisted channels")
+            logger.info(f"Clearing {len(self._channel_blacklist)} blacklisted channels")
             self._channel_blacklist.clear()
 
         try:
@@ -1023,9 +1035,18 @@ class Twitch:
             inventory_data = {c["id"]: c for c in inventory["dropCampaignsInProgress"] or []}
             available_campaigns = {c["id"]: c for c in camp_resp["data"]["currentUser"]["dropCampaigns"] or [] if c["status"] in ("ACTIVE", "UPCOMING")}
             
-            details_chunks = await asyncio.gather(*[self.fetch_campaigns(chunk) for chunk in chunk(available_campaigns.items(), 20)])
-            for chunk_data in details_chunks:
-                inventory_data = self._merge_data(inventory_data, chunk_data)
+            fetch_campaigns_tasks: list[asyncio.Task[dict[str, JsonType]]] = [
+                asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
+                for campaigns_chunk in chunk(available_campaigns.items(), 20)
+            ]
+            try:
+                for task in asyncio.as_completed(fetch_campaigns_tasks):
+                    chunk_data = await task
+                    inventory_data = self._merge_data(inventory_data, chunk_data)
+            except Exception:
+                for task in fetch_campaigns_tasks:
+                    task.cancel()
+                raise
                 
             if self.settings.dump:
                 with open(DUMP_PATH, 'a', encoding="utf8") as file:
@@ -1037,7 +1058,7 @@ class Twitch:
                             and campaign_data["allow"].get("channels")
                         ):
                             campaign_data["allow"]["channels"] = (
-                                f"{len(campaign_data['allow']['channels'])} csatorna"
+                                f"{len(campaign_data['allow']['channels'])} channels"
                             )
                         for drop_data in campaign_data.get("timeBasedDrops", []):
                             if "self" in drop_data and drop_data["self"].get("dropInstanceID"):
@@ -1099,7 +1120,10 @@ class Twitch:
                                     old_minutes = drop.real_current_minutes
                                     new_minutes = drop_data["self"]["currentMinutesWatched"]
                                     if new_minutes != old_minutes:
-                                        logger.info(f"📊 Progress update: {drop.name} {old_minutes}→{new_minutes}/{drop.required_minutes}min")
+                                        logger.info(
+                                            f"Progress update: {drop.name} "
+                                            f"{old_minutes}->{new_minutes}/{drop.required_minutes}min"
+                                        )
                                         drop.real_current_minutes = new_minutes
                                         drop.is_claimed = drop_data["self"]["isClaimed"]
             
@@ -1196,7 +1220,7 @@ class Twitch:
             logger.debug(f"Adaptive interval: Using 50s (no progress for {time_since_progress:.0f}s)")
         else:
             interval = 40
-            logger.info(f"⚠️ Adaptive interval: Using 40s (no progress for {time_since_progress:.0f}s)")
+            logger.info(f"Adaptive interval: Using 40s (no progress for {time_since_progress:.0f}s)")
         self._current_watch_interval = interval
         return add_jitter(interval, 0.15)
 
@@ -1210,7 +1234,7 @@ class Twitch:
             return True
         
         initial_minutes = campaign.first_drop.current_minutes
-        logger.info(f"🔍 Validating watch progress on {channel.name} (current: {initial_minutes} min)...")
+        logger.info(f"Validating watch progress on {channel.name} (current: {initial_minutes} min)...")
         
         for i in range(2):
             success = await channel.send_watch()
@@ -1229,11 +1253,11 @@ class Twitch:
                 progress_gained = new_minutes - initial_minutes
                 
                 if progress_gained > 0:
-                    logger.info(f"✅ Validation successful: +{progress_gained} min progress on {channel.name}")
+                    logger.info(f"Validation successful: +{progress_gained} min progress on {channel.name}")
                     self._validation_failures = 0
                     return True
                 else:
-                    logger.warning(f"❌ Validation failed: No progress gained on {channel.name}")
+                    logger.warning(f"Validation failed: No progress gained on {channel.name}")
                     return False
         except GQLException as e:
             logger.warning(f"Validation GQL failed: {e}")
@@ -1277,7 +1301,7 @@ class Twitch:
         if self.settings.available_drops_check:
             # ADDED: Performance warning
             if len(streams_map) > 20:
-                logger.info(f"⚠️ 'available_drops_check' is on. scanning {len(streams_map)} channels (this may take a moment)...")
+                logger.info(f"'available_drops_check' is on. scanning {len(streams_map)} channels (this may take a moment)...")
             drop_ops = []
             for cid, data in streams_map.items():
                 if data.get("stream") and cid is not None:
