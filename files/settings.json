@@ -1,4 +1,31 @@
 {
+    "_help": {
+        "note": "JSON does not support comments. Keys starting with '_' are documentation only and are ignored by the app.",
+        "docker": "Mount this file to /home/appuser/app/settings.json as read-only, then put cookies.jar in the same app directory or mounted volume.",
+        "priority": "Optional ordered list of game names to prefer. Leave empty to let the miner choose automatically.",
+        "exclude": "Optional set of game names to skip.",
+        "priority_mode": "0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED.",
+        "connection_quality": "1=low bandwidth, 2=medium, 3=high.",
+        "discord_webhook_url": "Leave blank to disable Discord notifications. Prefer DISCORD_WEBHOOK_URL in .env or compose secrets for real webhook URLs.",
+        "logging_level": "One of DEBUG, INFO, WARNING, ERROR.",
+        "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL."
+    },
+    "_examples": {
+        "priority": [
+            "Example Game A",
+            "Example Game B"
+        ],
+        "exclude": {
+            "__type": "set",
+            "data": [
+                "Example Game To Skip"
+            ]
+        },
+        "proxy": {
+            "__type": "URL",
+            "data": "http://user:password@proxy.example:8080"
+        }
+    },
     "connection_quality": 1,
     "stale_stream_timeout_minutes": 5,
     "maintenance_interval_minutes": 20,
