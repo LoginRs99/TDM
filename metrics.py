@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
-from typing import Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from constants import JsonType
@@ -24,12 +24,12 @@ class Metrics:
         self.metrics_path = metrics_path
         self.drops_claimed = 0
         self.drops_failed = 0
-        self.streams_watched: Dict[str, int] = defaultdict(int)  # channel -> minutes
+        self.streams_watched: dict[str, int] = defaultdict(int)  # channel -> minutes
         self.watch_attempts = 0
         self.watch_successes = 0
         self.uptime_start = datetime.now(timezone.utc)
         self.last_drop_time: datetime | None = None
-        self.errors: Dict[str, int] = defaultdict(int)  # error_type -> count
+        self.errors: dict[str, int] = defaultdict(int)  # error_type -> count
         
         # Load existing metrics if available
         if self.metrics_path and self.metrics_path.exists():
@@ -40,26 +40,33 @@ class Metrics:
         if success:
             self.drops_claimed += 1
             self.last_drop_time = datetime.now(timezone.utc)
-            logger.info(f"📊 Metrics: Total drops claimed: {self.drops_claimed}")
+            logger.info(f"Metrics: Total drops claimed: {self.drops_claimed}")
         else:
             self.drops_failed += 1
-            logger.warning(f"📊 Metrics: Drop claim failed for {drop_name}")
+            logger.warning(f"Metrics: Drop claim failed for {drop_name}")
         
         self._save_metrics()
     
     def record_stream_watch(self, channel_name: str, minutes: int = 1):
         """Record time spent watching a channel"""
         self.streams_watched[channel_name] += minutes
+        self._save_metrics()
     
     def record_watch_attempt(self, success: bool):
         """Record a watch request attempt"""
         self.watch_attempts += 1
         if success:
             self.watch_successes += 1
+        self._save_metrics()
     
     def record_error(self, error_type: str):
         """Record an error occurrence"""
         self.errors[error_type] += 1
+        self._save_metrics()
+
+    def heartbeat(self) -> None:
+        """Refresh the metrics file so healthchecks can see a live process."""
+        self._save_metrics()
     
     def get_watch_success_rate(self) -> float:
         """Calculate the success rate of watch attempts"""
@@ -100,7 +107,7 @@ class Metrics:
         uptime_hours = stats["uptime_hours"]
         
         lines = [
-            "📊 === Metrics Summary ===",
+            "=== Metrics Summary ===",
             f"Uptime: {uptime_hours:.1f} hours",
             f"Drops Claimed: {stats['drops_claimed']} (Success Rate: {stats['drop_success_rate']:.1f}%)",
             f"Watch Requests: {stats['watch_successes']}/{stats['watch_attempts']} (Success Rate: {stats['watch_success_rate']:.1f}%)",
@@ -147,7 +154,7 @@ class Metrics:
             if last_drop := data.get("last_drop_time"):
                 self.last_drop_time = datetime.fromisoformat(last_drop)
             
-            logger.info("📊 Loaded existing metrics from disk")
+            logger.info("Loaded existing metrics from disk")
         except Exception as e:
             logger.warning(f"Failed to load metrics: {e}")
     
@@ -162,4 +169,4 @@ class Metrics:
         self.errors.clear()
         self.uptime_start = datetime.now(timezone.utc)
         self._save_metrics()
-        logger.info("📊 Metrics reset")
+        logger.info("Metrics reset")

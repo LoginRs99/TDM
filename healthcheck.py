@@ -115,30 +115,30 @@ def check_metrics() -> tuple[bool, str]:
 
 def main():
     """Run all health checks and report results"""
-    print(f"ðŸ¥ Running healthcheck at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Running healthcheck at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     
     # Core timestamp check (CRITICAL)
     timestamp_ok, timestamp_msg = check_timestamp()
-    print(f"{'âœ…' if timestamp_ok else 'âŒ'} Timestamp: {timestamp_msg}")
+    print(f"{'OK' if timestamp_ok else 'FAIL'} Timestamp: {timestamp_msg}")
     
     # Stats freshness check (WARNING ONLY)
     stats_ok, stats_msg = check_stats_freshness()
-    print(f"{'âœ…' if stats_ok else 'âš ï¸ '} Stats: {stats_msg}")
+    print(f"{'OK' if stats_ok else 'WARN'} Stats: {stats_msg}")
     
     # Metrics check (INFO ONLY)
     metrics_ok, metrics_msg = check_metrics()
-    print(f"{'âœ…' if metrics_ok else 'âš ï¸ '} Metrics: {metrics_msg}")
+    print(f"{'OK' if metrics_ok else 'WARN'} Metrics: {metrics_msg}")
     
     print("=" * 60)
     
     # Overall health decision
     # Only timestamp check is critical for health
     if timestamp_ok:
-        print("âœ… HEALTHCHECK PASSED")
+        print("HEALTHCHECK PASSED")
         sys.exit(0)
     else:
-        print("âŒ HEALTHCHECK FAILED")
+        print("HEALTHCHECK FAILED")
         sys.exit(1)
 
 
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"âŒ Healthcheck error: {e}")
+        print(f"Healthcheck error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

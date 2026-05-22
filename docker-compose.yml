@@ -7,15 +7,6 @@ services:
     init: true
     # Fix: Ensure the container has enough shared memory if the miner uses a headless browser
     shm_size: '256mb'
-    user: "${UID:-1000}:${GID:-1000}"
-    
-    # NEW: DNS Fix
-    # Your logs showed 'ClientConnectorDNSError'. 
-    # Explicitly setting stable DNS helps prevent those look-up failures.
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-
     environment:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_SUMMARY_INTERVAL=${DISCORD_SUMMARY_INTERVAL:-240}
@@ -44,16 +35,6 @@ services:
       options:
         max-size: "10m"
         max-file: "2"
-
-    deploy:
-      resources:
-        limits:
-          # Increased slightly. 0.5 CPU can be tight during 
-          # "INVENTORY_FETCH" if the JSON response is huge.
-          cpus: '0.75' 
-          memory: 512M
-        reservations:
-          memory: 128M
 
     healthcheck:
       # Ensure healthcheck.py exists in your build context!

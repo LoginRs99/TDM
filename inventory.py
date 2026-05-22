@@ -104,6 +104,7 @@ class BaseDrop:
         return all(campaign.timed_drops[pid].is_claimed for pid in self.precondition_drops)
 
     def _on_state_changed(self) -> None:
+        """Hook for state observers; headless mode has no UI observer."""
         pass
 
     def _base_earn_conditions(self) -> bool:
@@ -172,11 +173,7 @@ class BaseDrop:
                 f"({self.campaign.claimed_drops}/{self.campaign.total_drops}) | "
                 f"{self.rewards_text()}"
             )
-            # self._twitch.print( # REMOVED
-            #     _("status", "claimed_drop").format(drop=claim_text) # REMOVED
-            # ) # REMOVED
             logger.info(f"Claimed drop: {claim_text}")
-            # self._twitch.gui.tray.notify(claim_text, _("gui", "tray", "notification_title")) # REMOVED
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result
@@ -292,9 +289,6 @@ class TimedDrop(BaseDrop):
             and self.extra_current_minutes < MAX_EXTRA_MINUTES
         )
 
-    def _on_state_changed(self) -> None:
-        pass
-
     def _update_real_minutes(self, delta: int) -> None:
         if delta == 0 or self.real_current_minutes + delta < 0:
             return
@@ -320,9 +314,6 @@ class TimedDrop(BaseDrop):
             self.extra_current_minutes = 0
         self._on_state_changed()
         return result
-
-    # def display(self, *, countdown: bool = True, subone: bool = False):
-        # self._twitch.gui.display_drop(self, countdown=countdown, subone=subone)
 
     def update_minutes(self, new_minutes: int):
         delta: int = new_minutes - self.real_current_minutes
@@ -442,8 +433,6 @@ class DropsCampaign:
     def _update_real_minutes(self, delta: int) -> None:
         for drop in self.drops:
             drop._update_real_minutes(delta)
-        # if (first_drop := self.first_drop) is not None:
-            # first_drop.display()
 
     def _base_can_earn(
         self, channel: Channel | None = None, ignore_channel_status: bool = False
@@ -458,7 +447,7 @@ class DropsCampaign:
                     # and the channel is live and playing the campaign's game
                     and (
                         ignore_channel_status
-                        or channel.game is not None and (channel.game == self.game or self.game.is_special_event())
+                        or channel.game is not None and (channel.game == self.game or self.game.is_special_events())
                     )
                 )
             )
@@ -504,5 +493,3 @@ class DropsCampaign:
                 "has reached the maximum extra minutes limit!"
             )
             self._twitch.change_state(State.CHANNEL_SWITCH)
-        # if (first_drop := self.first_drop) is not None:
-            # first_drop.display()

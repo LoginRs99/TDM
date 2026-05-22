@@ -5,8 +5,6 @@
 #
 # Example: cp docker-compose.override.yml.example docker-compose.override.yml
 
-version: '3.8'
-
 services:
   twitch-drops-miner:
     # ========================================
@@ -52,13 +50,13 @@ services:
       - TZ=UTC
     
     # Resource limits (adjusted for development)
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'      # More CPU for development
-          memory: 1G       # More memory for development
-        reservations:
-          memory: 256M
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.75'
+    #       memory: 512M
+    #     reservations:
+    #       memory: 128M
     
     # ========================================
     # PRODUCTION OVERRIDES
@@ -87,48 +85,6 @@ services:
     # networks:
     #   - twitch_network
     
-    # ========================================
-    # MONITORING & OBSERVABILITY
-    # ========================================
-    
-    # Expose metrics port (if you add Prometheus support later)
-    # ports:
-    #   - "9090:9090"
-    
-    # Add labels for monitoring
-    # labels:
-    #   - "com.example.app=twitch-drops-miner"
-    #   - "com.example.environment=production"
-    #   - "com.example.version=2.0.0"
-
-# ========================================
-# ADDITIONAL SERVICES (optional)
-# ========================================
-
-# Uncomment to add Watchtower for automatic updates
-# watchtower:
-#   image: containrrr/watchtower
-#   container_name: watchtower
-#   restart: unless-stopped
-#   volumes:
-#     - /var/run/docker.sock:/var/run/docker.sock
-#   environment:
-#     - WATCHTOWER_CLEANUP=true
-#     - WATCHTOWER_SCHEDULE=0 0 4 * * *  # 4 AM daily
-#     - WATCHTOWER_INCLUDE_STOPPED=true
-
-# Uncomment to add autoheal (auto-restart unhealthy containers)
-# autoheal:
-#   image: willfarrell/autoheal
-#   container_name: autoheal
-#   restart: unless-stopped
-#   volumes:
-#     - /var/run/docker.sock:/var/run/docker.sock
-#   environment:
-#     - AUTOHEAL_CONTAINER_LABEL=all
-#     - AUTOHEAL_INTERVAL=60
-#     - AUTOHEAL_START_PERIOD=300
-
 # Custom networks (if needed)
 # networks:
 #   twitch_network:
