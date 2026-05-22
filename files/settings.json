@@ -1,7 +1,9 @@
 {
     "_help": {
         "note": "JSON does not support comments. Keys starting with '_' are documentation only and are ignored by the app.",
-        "docker": "Mount this file to /home/appuser/app/settings.json as read-only, then put cookies.jar in the same app directory or mounted volume.",
+        "docker": "Mount this file to /home/appuser/app/settings.json as read-only, then mount cookies.jar to /home/appuser/app/cookies.jar.",
+        "login": "Login uses cookies.jar. Export Twitch browser cookies in Netscape cookie-file format and place the file at ./files/cookies.jar before starting Docker.",
+        "login_expired": "If Twitch logs you out or cookies expire, export a fresh cookies.jar and restart the container. Do not commit cookies.jar.",
         "priority": "Optional ordered list of game names to prefer. Leave empty to let the miner choose automatically.",
         "exclude": "Optional set of game names to skip.",
         "priority_mode": "0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED.",

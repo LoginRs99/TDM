@@ -22,6 +22,7 @@ services:
     volumes:
       # Override the default volumes if needed
       - ./files/settings.json:/home/appuser/app/settings.json:ro
+      # Replace this file whenever Twitch login expires. Never commit real cookies.
       - ./files/cookies.jar:/home/appuser/app/cookies.jar
       - ./files/logs:/home/appuser/app/logs
       

@@ -16,6 +16,8 @@ services:
     volumes:
       # Note: If the app tries to update settings automatically, remove ':ro'
       - ./files/settings.json:/home/appuser/app/settings.json:ro
+      # Login: export Twitch browser cookies in Netscape format to ./files/cookies.jar.
+      # Keep this file private and out of git; replace it and restart if Twitch logs out.
       - ./files/cookies.jar:/home/appuser/app/cookies.jar
       - ./files/watch_stats.json:/home/appuser/app/watch_stats.json
       - ./files/logs:/home/appuser/app/logs
