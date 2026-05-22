@@ -70,6 +70,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("TwitchDrops")
 gql_logger = logging.getLogger("TwitchDrops.gql")
 WATCH_STATS_PATH = Path(WORKING_DIR, "watch_stats.json")
+BALANCED_URGENCY_WINDOW_HOURS = 48
+SCARCE_ACL_CHANNEL_LIMIT = 3
+SCARCE_LIVE_CHANNEL_LIMIT = 3
+LOW_AVAILABILITY_RATIO = 1.5
 
 
 class SkipExtraJsonDecoder(json.JSONDecoder):
@@ -203,6 +207,7 @@ class Twitch:
         self._consecutive_gql_failures: int = 0
         self._last_inventory_fetch: datetime = datetime.now(timezone.utc)
         self._session_created: float = 0
+        self._game_live_counts: dict[str, int] = {}
         # Initialize Blacklist
         self._channel_blacklist: dict[int, int] = {}
         
@@ -320,73 +325,58 @@ class Twitch:
         
     def get_balanced_priority(self, channel: Channel) -> float:
         """
-        Final Optimized Priority Logic.
-        Lower score = higher priority.
-        
-        Factors:
-        1. Config Priority (High/Low)
-        2. Urgency (Ending soon)
-        3. Feasibility (Can we finish it?)
-        4. Lock-in (Are we almost done?)
+        Balanced channel ranking. Lower score = higher priority.
+
+        User priority still wins, but scarce ACL campaigns, ending-soon campaigns,
+        and nearly finished drops get small boosts so short availability windows
+        do not get missed.
         """
         if (game := channel.game) is None:
             return float('inf')
-        
+
         active_campaign = self.get_active_campaign(channel)
         if not active_campaign:
             return float('inf')
-        
-        # Configuration
-        pref_weight = self.settings.priority_weight_preference / 100.0
-        urgency_weight = self.settings.priority_weight_urgency / 100.0
-        urgency_window_hours = self.settings.priority_urgency_window_hours
-        
-        # --- 1. BASE PRIORITY ---
-        if game in self.wanted_games:
-            try:
-                # If it's in our "wanted" list, score is 0.0 to 1.0 based on position
-                base_score = self.wanted_games.index(game) / max(len(self.wanted_games), 1)
-            except ValueError:
-                base_score = 1.0
+
+        priority_names = self.settings.priority
+        if game.name in priority_names:
+            score = float(priority_names.index(game.name))
         else:
-            # Filler games get a score of 2.0 (lowest priority)
-            base_score = 2.0
-            
-        # --- 2. URGENCY SCORE ---
+            score = float(len(priority_names) + 2)
+
         now = datetime.now(timezone.utc)
-        if active_campaign.ends_at:
-            time_remaining_hours = (active_campaign.ends_at - now).total_seconds() / 3600
-        else:
-            time_remaining_hours = 999
-        
+        time_remaining_hours = self._campaign_hours_left(active_campaign, now)
         if time_remaining_hours <= 0:
-            return float('inf') # Expired
-            
-        # Linear curve: 0h left = 0.0 score (Max Urgent), Window limit = 1.0 score
-        urgency_score = min(time_remaining_hours / max(urgency_window_hours, 1), 1.0)
-        
-        # --- 3. LOCK-IN BONUS (Efficiency Boost) ---
-        # If we are > 85% done with a drop, reduce score (increase priority) by 0.5
-        completion_bonus = 0.0
+            return float('inf')
+
+        if active_campaign.allowed_channels:
+            allowed_count = len(active_campaign.allowed_channels)
+            if allowed_count <= 1:
+                score -= 0.75
+            elif allowed_count <= SCARCE_ACL_CHANNEL_LIMIT:
+                score -= 0.5
+
+        live_count = self._game_live_counts.get(game.name)
+        if live_count is not None:
+            if live_count <= 1:
+                score -= 0.75
+            elif live_count <= SCARCE_LIVE_CHANNEL_LIMIT:
+                score -= 0.5
+
+        if active_campaign.availability <= LOW_AVAILABILITY_RATIO:
+            score -= 0.35
+
+        if time_remaining_hours <= BALANCED_URGENCY_WINDOW_HOURS:
+            urgency = 1 - (time_remaining_hours / BALANCED_URGENCY_WINDOW_HOURS)
+            score -= min(max(urgency, 0), 1) * 0.5
+
         if active_campaign.progress > 0.85:
-            completion_bonus = -0.5
-            
-        # --- 4. FEASIBILITY CHECK ---
-        # If drop needs 60 mins but campaign ends in 30 mins, penalize heavily (+5.0)
-        remaining_minutes = active_campaign.remaining_minutes
-        available_minutes = time_remaining_hours * 60
-        
-        feasibility_penalty = 5.0 if remaining_minutes > available_minutes else 0.0
-        
-        # --- FINAL CALCULATION ---
-        final_score = (
-            (base_score * pref_weight) +
-            (urgency_score * urgency_weight) +
-            completion_bonus +
-            feasibility_penalty
-        )
-        
-        return final_score
+            score -= 0.5
+
+        if not self._campaign_can_finish(active_campaign, now):
+            score += 5.0
+
+        return score
 
     def get_priority(self, channel: Channel) -> int | float:
         if self.settings.priority_mode is PriorityMode.BALANCED:
@@ -395,14 +385,39 @@ class Twitch:
             return MAX_INT
         return self.wanted_games.index(game)
 
+    @staticmethod
+    def _campaign_hours_left(campaign: DropsCampaign, now: datetime) -> float:
+        return (campaign.ends_at - now).total_seconds() / 3600
+
+    @classmethod
+    def _campaign_can_finish(cls, campaign: DropsCampaign, now: datetime) -> bool:
+        return campaign.remaining_minutes <= cls._campaign_hours_left(campaign, now) * 60
+
+    @staticmethod
+    def _campaign_availability(campaign: DropsCampaign) -> float:
+        return campaign.availability if math.isfinite(campaign.availability) else math.inf
+
+    @classmethod
+    def _campaign_scarcity_key(cls, campaign: DropsCampaign) -> tuple[int, int, float, datetime]:
+        if campaign.allowed_channels:
+            return (
+                0,
+                len(campaign.allowed_channels),
+                cls._campaign_availability(campaign),
+                campaign.ends_at,
+            )
+        if cls._campaign_availability(campaign) <= LOW_AVAILABILITY_RATIO:
+            return (1, MAX_INT, cls._campaign_availability(campaign), campaign.ends_at)
+        return (2, MAX_INT, cls._campaign_availability(campaign), campaign.ends_at)
+
     def get_smart_campaigns(self) -> list[DropsCampaign]:
         """
-        Final Optimized Selection Logic.
+        Balanced campaign selection.
         
         Tiers:
-        1. Priority Games (from settings)
-        2. Urgent Campaigns (Ending < 6h)
-        3. Filler (Everything else, sorted by availability)
+        1. Priority games from settings
+        2. Scarce or urgent non-priority campaigns
+        3. Other active connected campaigns
         """
         now = datetime.now(timezone.utc)
         priority_list = self.settings.priority
@@ -412,7 +427,7 @@ class Twitch:
         # Look ahead 7 days to ensure we always have something to do
         all_campaigns = [
             c for c in self.inventory 
-            if not c.has_badge_or_emote
+            if (not c.has_badge_or_emote or self.settings.enable_badges_emotes)
             and c.game.name not in self.settings.exclude
             and c.can_earn_within(now + timedelta(days=7))
         ]
@@ -427,34 +442,46 @@ class Twitch:
                 key=lambda c: priority_list.index(c.game.name)
             )
 
-        # For BALANCED / STANDARD modes:
-        
-        # A. Priority Campaigns (The games you listed in settings)
         priority_campaigns = [c for c in all_campaigns if c.game.name in priority_list]
-        priority_campaigns.sort(key=lambda c: priority_list.index(c.game.name))
+        priority_campaigns.sort(
+            key=lambda c: (
+                not c.active,
+                priority_list.index(c.game.name),
+                not self._campaign_can_finish(c, now),
+                self._campaign_scarcity_key(c),
+            )
+        )
         
-        # B. Urgent Non-Priority (Ending within 6 hours)
-        urgent_campaigns = [
+        non_priority_active = [
             c for c in all_campaigns 
             if c.game.name not in priority_list 
-            and (c.ends_at - now).total_seconds() < (6 * 3600)
-            # Simple feasibility check
-            and c.remaining_minutes <= (c.ends_at - now).total_seconds() / 60
-        ]
-        urgent_campaigns.sort(key=lambda c: c.ends_at)
-        
-        # C. Filler (Everything else that is currently active)
-        filler_campaigns = [
-            c for c in all_campaigns 
-            if c.game.name not in priority_list 
-            and c not in urgent_campaigns
             and c.active
         ]
-        # Sort filler by availability (easiest to catch first)
-        filler_campaigns.sort(key=lambda c: c.availability)
+
+        scarce_campaigns = [
+            c for c in non_priority_active
+            if c.allowed_channels
+            and len(c.allowed_channels) <= SCARCE_ACL_CHANNEL_LIMIT
+            and self._campaign_can_finish(c, now)
+        ]
+        scarce_campaigns.sort(key=self._campaign_scarcity_key)
+
+        urgent_campaigns = [
+            c for c in non_priority_active
+            if c not in scarce_campaigns
+            and self._campaign_hours_left(c, now) <= BALANCED_URGENCY_WINDOW_HOURS
+            and self._campaign_can_finish(c, now)
+        ]
+        urgent_campaigns.sort(key=lambda c: (c.ends_at, self._campaign_scarcity_key(c)))
+
+        filler_campaigns = [
+            c for c in non_priority_active
+            if c not in scarce_campaigns
+            and c not in urgent_campaigns
+        ]
+        filler_campaigns.sort(key=self._campaign_scarcity_key)
         
-        # Combine lists: Priority -> Urgent -> Filler
-        final_list = priority_campaigns + urgent_campaigns + filler_campaigns
+        final_list = priority_campaigns + scarce_campaigns + urgent_campaigns + filler_campaigns
         
         return final_list
 
@@ -586,6 +613,13 @@ class Twitch:
                 
                 for game in no_acl_games:
                     new_channels.update(await self.get_live_streams(game))
+
+                self._game_live_counts.clear()
+                for channel in new_channels:
+                    if channel.game and channel.online and channel.drops_enabled:
+                        self._game_live_counts[channel.game.name] = (
+                            self._game_live_counts.get(channel.game.name, 0) + 1
+                        )
                 
                 ordered = sorted(new_channels, key=self._viewers_key, reverse=True)
                 ordered.sort(key=lambda ch: ch.acl_based, reverse=True)

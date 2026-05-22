@@ -22,10 +22,6 @@ class SettingsFile(TypedDict):
     priority_mode: PriorityMode
     stale_stream_timeout_minutes: int
     maintenance_interval_minutes: int
-    # New optimization fields
-    priority_weight_preference: int
-    priority_weight_urgency: int
-    priority_urgency_window_hours: int
     # Discord / Logging
     discord_webhook_url: str
     discord_summary_interval_minutes: int
@@ -45,10 +41,6 @@ default_settings: SettingsFile = {
     "priority_mode": PriorityMode.BALANCED, 
     "maintenance_interval_minutes": 20,
     "stale_stream_timeout_minutes": 5,
-    # Default weights for the new algorithm
-    "priority_weight_preference": 55,
-    "priority_weight_urgency": 45,
-    "priority_urgency_window_hours": 48,
     "discord_webhook_url": "",
     "discord_summary_interval_minutes": 60,
     "logging_level": "INFO",
@@ -72,9 +64,6 @@ class Settings:
     priority: list[str]
     connection_quality: int
     priority_mode: PriorityMode
-    priority_weight_preference: int
-    priority_weight_urgency: int
-    priority_urgency_window_hours: int
     discord_webhook_url: str
     discord_summary_interval_minutes: int
     stale_stream_timeout_minutes: int
@@ -179,19 +168,6 @@ class Settings:
     
     def _validate_settings(self):
         """Validate settings values are in acceptable ranges"""
-        
-        # Validate weights sum to approximately 100
-        total_weight = (
-            self._settings['priority_weight_preference'] + 
-            self._settings['priority_weight_urgency']
-        )
-        if abs(total_weight - 100) > 10:  # Allow 10% tolerance
-            logger.warning(
-                f"Priority weights should sum to ~100% "
-                f"(current: preference={self._settings['priority_weight_preference']}%, "
-                f"urgency={self._settings['priority_weight_urgency']}%, "
-                f"total={total_weight}%)"
-            )
         
         # Validate intervals are positive
         if self._settings['maintenance_interval_minutes'] < 5:
