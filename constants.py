@@ -352,8 +352,8 @@ GQL_QUERIES: dict[str, GQLPersistedQuery] = {
         },
     ),
     "GameDirectory": GQLPersistedQuery(
-        "GameDirectory",
-        "cb5dc816e139dcb8a118f14b4b016c4bc2bb00a47fe0ddec4",
+        "DirectoryPage_Game",
+        "cb5dc816e139dcb8a118f14b4b677d59abc224a4b016c4bc2bb00a47fe0ddec4",
         variables={
             "limit": 30,
             "slug": ...,
@@ -369,6 +369,7 @@ GQL_QUERIES: dict[str, GQLPersistedQuery] = {
                 "tags": [],
                 "requestID": "JIRA-VXP-2397",
             },
+            "sortTypeIsRecency": False,
         },
     ),
     "SlugRedirect": GQLPersistedQuery(
