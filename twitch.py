@@ -144,13 +144,19 @@ class _AuthState:
         if not hasattr(self, "device_id"):
             cookie = jar.filter_cookies(client_info.CLIENT_URL)
             if "unique_id" not in cookie:
-                raise LoginException("Device ID (unique_id) not found in cookie. Please log in again to generate it.")
+                raise LoginException(
+                    f"Device ID (unique_id) not found in {COOKIES_PATH}. "
+                    "Export a fresh Twitch cookies.jar after logging in, then restart the container."
+                )
             self.device_id = cookie["unique_id"].value
 
         logger.info("Validating session from cookie...")
         cookie = jar.filter_cookies(client_info.CLIENT_URL)
         if "auth-token" not in cookie:
-            raise LoginException("Authentication token not found in cookies.jar. Please provide a valid cookie file.")
+            raise LoginException(
+                f"Authentication token not found in {COOKIES_PATH}. "
+                "Make sure cookies.jar was exported from an active Twitch browser session."
+            )
         
         self.access_token = cookie["auth-token"].value
         
@@ -159,7 +165,10 @@ class _AuthState:
             headers={"Authorization": f"OAuth {self.access_token}"}
         ) as response:
             if response.status == 401:
-                raise LoginException("Twitch cookie is invalid or expired. Please provide a new cookies.jar file.")
+                raise LoginException(
+                    "Twitch rejected the cookie login. cookies.jar is invalid or expired. "
+                    "Export a fresh Twitch cookies.jar and restart the container."
+                )
             
             validate_response = await response.json()
             if validate_response["client_id"] != client_info.CLIENT_ID:
@@ -236,6 +245,11 @@ class Twitch:
                 except Exception as e:
                     logger.warning(f"Could not load cookies.jar: {e}")
                     cookie_jar.clear()
+            else:
+                logger.warning(
+                    "cookies.jar not found at %s. Login will fail until the file is mounted.",
+                    COOKIES_PATH,
+                )
             
             # Increased timeouts for better reliability
             timeout = aiohttp.ClientTimeout(sock_connect=30, sock_read=60, total=90)
@@ -1036,6 +1050,7 @@ class Twitch:
                 
                 resp_list = json_resp if isinstance(json_resp, list) else [json_resp]
                 retry = False
+                retry_reason = ""
                 
                 for item in resp_list:
                     if "errors" in item:
@@ -1044,6 +1059,7 @@ class Twitch:
                             if single_retry:
                                 single_retry = False
                                 retry = True
+                                retry_reason = "persisted query was not found"
                                 break
                             raise GQLException(
                                 "Twitch rejected a persisted GQL query. "
@@ -1052,14 +1068,19 @@ class Twitch:
                         if single_retry and "service error" in msg:
                             single_retry = False
                             retry = True
+                            retry_reason = "temporary Twitch service error"
                             break
                         if "service timeout" in msg or "service unavailable" in msg:
                             retry = True
+                            retry_reason = "temporary Twitch service outage"
                             break
                         if "unauthorized" in msg or "forbidden" in msg:
-                            raise GQLException(item['errors'])
-                        if "persistedquerynotfound" not in msg:
-                            logger.warning(f"GQL error (will retry): {item['errors']}")
+                            self._auth_state.invalidate()
+                            raise LoginException(
+                                "Twitch rejected the current login while making a GQL request. "
+                                "cookies.jar may have expired; export a fresh one and restart the container."
+                            )
+                        retry_reason = str(item["errors"])
                         retry = True
                         break
                 
@@ -1068,7 +1089,12 @@ class Twitch:
                     return json_resp
                     
                 if retry:
-                    await asyncio.sleep(0.1)  # 100ms cooldown
+                    logger.warning(
+                        "GQL error (%s). Retrying in %.1fs",
+                        retry_reason or "unknown error",
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
                     
             except (RequestException, asyncio.TimeoutError) as e:
                 logger.warning(f"GQL request failed: {e}. Retrying in {delay:.1f}s")
