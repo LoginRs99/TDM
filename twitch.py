@@ -601,18 +601,31 @@ class Twitch:
 
             elif self._state is State.CHANNELS_FETCH:
                 logger.info("State: CHANNELS_FETCH")
+                fetch_started = time()
                 new_channels: set[Channel] = set(channels.values())
                 channels.clear()
                 
                 campaigns_to_scan = [c for c in self.inventory if c.game in self.wanted_games and c.can_earn_within(datetime.now(timezone.utc) + timedelta(hours=1))]
                 acl_channels = {ch for c in campaigns_to_scan if c.allowed_channels for ch in c.allowed_channels}
                 no_acl_games = {c.game for c in campaigns_to_scan if not c.allowed_channels}
+                logger.info(
+                    "Scanning channels for %d campaigns: %d ACL channels, %d open games",
+                    len(campaigns_to_scan),
+                    len(acl_channels),
+                    len(no_acl_games),
+                )
 
                 await self.bulk_check_online(acl_channels - new_channels)
                 new_channels.update(acl_channels)
                 
                 for game in no_acl_games:
-                    new_channels.update(await self.get_live_streams(game))
+                    live_streams = await self.get_live_streams(game)
+                    logger.info(
+                        "Found %d drops-enabled streams for %s",
+                        len(live_streams),
+                        game.name,
+                    )
+                    new_channels.update(live_streams)
 
                 self._game_live_counts.clear()
                 for channel in new_channels:
@@ -627,6 +640,12 @@ class Twitch:
                 
                 for channel in ordered[:MAX_CHANNELS]: 
                     channels[channel.id] = channel
+                logger.info(
+                    "Channel scan complete: tracking %d/%d channels in %.1fs",
+                    len(channels),
+                    len(new_channels),
+                    time() - fetch_started,
+                )
                 
                 # Create websocket topics with proper method references
                 topics = []
@@ -1021,7 +1040,16 @@ class Twitch:
                 for item in resp_list:
                     if "errors" in item:
                         msg = str(item["errors"]).lower()
-                        if single_retry and ("service error" in msg or "persistedquerynotfound" in msg):
+                        if "persistedquerynotfound" in msg:
+                            if single_retry:
+                                single_retry = False
+                                retry = True
+                                break
+                            raise GQLException(
+                                "Twitch rejected a persisted GQL query. "
+                                "The query name or hash likely needs an upstream update."
+                            )
+                        if single_retry and "service error" in msg:
                             single_retry = False
                             retry = True
                             break
