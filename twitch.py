@@ -7,6 +7,7 @@ import asyncio
 import logging
 import math
 import random
+from difflib import get_close_matches
 from time import time
 from pathlib import Path
 from copy import deepcopy
@@ -217,6 +218,7 @@ class Twitch:
         self._last_inventory_fetch: datetime = datetime.now(timezone.utc)
         self._session_created: float = 0
         self._game_live_counts: dict[str, int] = {}
+        self._last_settings_validation_signature: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None = None
         # Initialize Blacklist
         self._channel_blacklist: dict[int, int] = {}
         
@@ -423,6 +425,51 @@ class Twitch:
         if cls._campaign_availability(campaign) <= LOW_AVAILABILITY_RATIO:
             return (1, MAX_INT, cls._campaign_availability(campaign), campaign.ends_at)
         return (2, MAX_INT, cls._campaign_availability(campaign), campaign.ends_at)
+
+    def validate_configured_game_names(self) -> None:
+        available_names = sorted({campaign.game.name for campaign in self.inventory})
+        if not available_names:
+            return
+
+        priority_names = tuple(self.settings.priority)
+        exclude_names = tuple(sorted(self.settings.exclude))
+        signature = (tuple(available_names), priority_names, exclude_names)
+        if signature == self._last_settings_validation_signature:
+            return
+        self._last_settings_validation_signature = signature
+
+        available_set = set(available_names)
+        invalid_priority = [name for name in priority_names if name not in available_set]
+        invalid_exclude = [name for name in exclude_names if name not in available_set]
+        if not invalid_priority and not invalid_exclude:
+            return
+
+        logger.warning(
+            "Some configured game names do not match active Twitch campaign names exactly."
+        )
+        self._log_invalid_game_names("priority", invalid_priority, available_names)
+        self._log_invalid_game_names("exclude", invalid_exclude, available_names)
+        logger.info("Active campaign game names: %s", ", ".join(available_names))
+
+    @staticmethod
+    def _log_invalid_game_names(
+        setting_name: str, invalid_names: list[str], available_names: list[str]
+    ) -> None:
+        for name in invalid_names:
+            suggestions = get_close_matches(name, available_names, n=3, cutoff=0.55)
+            if suggestions:
+                logger.warning(
+                    "Unknown %s game %r. Did you mean: %s?",
+                    setting_name,
+                    name,
+                    ", ".join(repr(suggestion) for suggestion in suggestions),
+                )
+            else:
+                logger.warning(
+                    "Unknown %s game %r. Check spelling and capitalization.",
+                    setting_name,
+                    name,
+                )
 
     def get_smart_campaigns(self) -> list[DropsCampaign]:
         """
@@ -1180,6 +1227,7 @@ class Twitch:
                 self._campaigns[campaign.id] = campaign
             
             while self._mnt_triggers and self._mnt_triggers[0] <= now: self._mnt_triggers.popleft()
+            self.validate_configured_game_names()
             
             self._consecutive_gql_failures = 0
             self.update_healthcheck()
