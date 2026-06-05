@@ -12,7 +12,6 @@
         "logging_level": "One of DEBUG, INFO, WARNING, ERROR.",
         "enable_badges_emotes": "Set true to load Twitch badges/emotes data if supported. Leave false for a lean headless container.",
         "available_drops_check": "Set true to perform extra available-drop checks. Leave false unless you need the extra discovery behavior.",
-        "enable_watch_stats": "Set true to write additional watch statistics. Leave false if you only want core mining behavior.",
         "exclude": "Optional set of exact game names to skip. Keep empty unless there are games you never want to watch.",
         "priority": "Optional ordered list of exact game names to prefer. Keep empty to let the miner choose automatically.",
         "priority_mode": "How games are selected: 0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED. BALANCED is recommended: priority list first, then scarce/urgent connected campaigns, then other active drops.",
@@ -42,7 +41,6 @@
     "logging_level": "INFO",
     "enable_badges_emotes": false,
     "available_drops_check": false,
-    "enable_watch_stats": false,
     "exclude": {
         "__type": "set",
         "data": []

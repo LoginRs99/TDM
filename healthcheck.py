@@ -2,7 +2,7 @@
 """
 Enhanced Docker healthcheck script for Twitch Drops Miner
 Returns exit code 0 if healthy, 1 if unhealthy
-Monitors: timestamp freshness, failure count, error state, and stats file updates
+Monitors: timestamp freshness, failure count, error state, and metrics freshness
 """
 import sys
 import json
@@ -11,12 +11,11 @@ from time import time
 from datetime import datetime
 
 HEALTHCHECK_FILE = Path("healthcheck.timestamp")
-STATS_FILE = Path("watch_stats.json")
 METRICS_FILE = Path("metrics.json")
 
 MAX_AGE = 180  # 3 minutes - how old the timestamp can be
 MAX_FAILURES = 3  # Maximum consecutive failures before unhealthy
-MAX_STATS_AGE = 600  # 10 minutes - max age for stats file
+MAX_METRICS_AGE = 600  # 10 minutes - max age for metrics file
 
 
 def check_timestamp() -> tuple[bool, str]:
@@ -62,22 +61,6 @@ def check_timestamp() -> tuple[bool, str]:
         return False, f"Timestamp check error: {e}"
 
 
-def check_stats_freshness() -> tuple[bool, str]:
-    """Verify that watch stats are being updated (optional check)"""
-    if not STATS_FILE.exists():
-        # Stats file doesn't exist yet, but that's OK during startup
-        return True, "Stats file not created yet"
-    
-    try:
-        stats_age = time() - STATS_FILE.stat().st_mtime
-        if stats_age > MAX_STATS_AGE:
-            # This is a warning, not a failure
-            return True, f"Stats file stale: {stats_age:.0f}s old (warning only)"
-        return True, f"Stats fresh: {stats_age:.0f}s old"
-    except Exception as e:
-        return True, f"Stats check skipped: {e}"
-
-
 def check_metrics() -> tuple[bool, str]:
     """Check if metrics file exists and is being updated"""
     if not METRICS_FILE.exists():
@@ -102,7 +85,7 @@ def check_metrics() -> tuple[bool, str]:
         )
         
         # Metrics file is very stale
-        if metrics_age > MAX_STATS_AGE:
+        if metrics_age > MAX_METRICS_AGE:
             return True, f"Metrics stale but app running ({info})"
         
         return True, info
@@ -121,10 +104,6 @@ def main():
     # Core timestamp check (CRITICAL)
     timestamp_ok, timestamp_msg = check_timestamp()
     print(f"{'OK' if timestamp_ok else 'FAIL'} Timestamp: {timestamp_msg}")
-    
-    # Stats freshness check (WARNING ONLY)
-    stats_ok, stats_msg = check_stats_freshness()
-    print(f"{'OK' if stats_ok else 'WARN'} Stats: {stats_msg}")
     
     # Metrics check (INFO ONLY)
     metrics_ok, metrics_msg = check_metrics()

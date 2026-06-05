@@ -9,7 +9,6 @@ import math
 import random
 from difflib import get_close_matches
 from time import time
-from pathlib import Path
 from copy import deepcopy
 from itertools import chain
 from functools import partial
@@ -51,7 +50,6 @@ from constants import (
     MAX_INT,
     DUMP_PATH,
     COOKIES_PATH,
-    WORKING_DIR,
     MAX_CHANNELS,
     GQL_QUERIES,
     WATCH_INTERVAL,
@@ -70,7 +68,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("TwitchDrops")
 gql_logger = logging.getLogger("TwitchDrops.gql")
-WATCH_STATS_PATH = Path(WORKING_DIR, "watch_stats.json")
 BALANCED_URGENCY_WINDOW_HOURS = 48
 SCARCE_ACL_CHANNEL_LIMIT = 3
 SCARCE_LIVE_CHANNEL_LIMIT = 3
@@ -208,9 +205,6 @@ class Twitch:
         self._mnt_task: asyncio.Task[None] | None = None
         self._health_task: asyncio.Task[None] | None = None
         self._last_progress_timestamp: float = 0
-        self._watch_stats: JsonType | None = None
-        if self.settings.enable_watch_stats:
-            self._watch_stats = self._load_watch_stats()
         self._last_validation_time: float = 0
         self._validation_failures: int = 0
         self._current_watch_interval: float = WATCH_INTERVAL.total_seconds()
@@ -285,14 +279,6 @@ class Twitch:
         
         await self.discord.stop()
         await self.websocket.stop(clear_topics=True)
-        
-        # Only save watch stats if enabled
-        if self.settings.enable_watch_stats and self._watch_stats:
-            self._save_watch_stats()
-            logger.info(
-                f"Watch stats saved: {self._watch_stats['successful_watches']} successful, "
-                f"{self._watch_stats['failed_watches']} failed"
-            )
         
         if self._session:
             try:
@@ -770,7 +756,6 @@ class Twitch:
             watch_success = await channel.send_watch()
             if metrics := getattr(self, "metrics", None):
                 metrics.record_watch_attempt(watch_success)
-            self._update_watch_stats(watch_success, channel)
 
             if watch_success:
                 logger.debug(f"Watch sent to {channel.name}")
@@ -818,20 +803,7 @@ class Twitch:
                     if new_minutes > old_minutes:
                         self._last_progress_timestamp = time()
                         progress_gain = new_minutes - old_minutes
-                        
-                        # Track watch stats if enabled
-                        if self.settings.enable_watch_stats and self._watch_stats:
-                            self._watch_stats['total_watch_time_minutes'] += progress_gain
-                            
-                            if len(self._watch_stats['progress_intervals']) > 0:
-                                last_time = self._watch_stats['progress_intervals'][-1]
-                                interval_seconds = time() - last_time
-                                logger.debug(f"Progress interval: {interval_seconds:.0f}s")
-                            
-                            self._watch_stats['progress_intervals'].append(time())
-                            if len(self._watch_stats['progress_intervals']) > 100:
-                                self._watch_stats['progress_intervals'] = self._watch_stats['progress_intervals'][-100:]
-                        
+
                         if metrics := getattr(self, "metrics", None):
                             metrics.record_stream_watch(channel.name, progress_gain)
                         logger.info(f"Progress: {gql_drop.name} -> {new_minutes}/{gql_drop.required_minutes} min (+{progress_gain})")
@@ -1300,61 +1272,6 @@ class Twitch:
         if not wc or not wc.id: return None
         campaigns = [c for c in self.inventory if c.can_earn(wc)]
         return min(campaigns, key=lambda c: c.remaining_minutes) if campaigns else None
-        
-    def _load_watch_stats(self) -> JsonType:
-        default_stats = {
-            'successful_watches': 0,
-            'failed_watches': 0,
-            'drops_earned': 0,
-            'total_watch_time_minutes': 0,
-            'progress_intervals': [],
-            'channel_performance': {},
-            'last_updated': datetime.now(timezone.utc).isoformat()
-        }
-        try:
-            if WATCH_STATS_PATH.exists():
-                with open(WATCH_STATS_PATH, 'r', encoding='utf8') as f:
-                    loaded = json.load(f)
-                    return {**default_stats, **loaded}
-        except Exception as e:
-            logger.debug(f"Could not load watch stats: {e}")
-        return default_stats
-    
-    def _save_watch_stats(self) -> None:
-        try:
-            self._watch_stats['last_updated'] = datetime.now(timezone.utc).isoformat()
-            with open(WATCH_STATS_PATH, 'w', encoding='utf8') as f:
-                json.dump(self._watch_stats, f, indent=2)
-        except Exception as e:
-            logger.debug(f"Could not save watch stats: {e}")
-    
-    def _update_watch_stats(self, success: bool, channel: Channel) -> None:
-        if not self.settings.enable_watch_stats or not self._watch_stats:
-            return
-            
-        if success:
-            self._watch_stats['successful_watches'] += 1
-        else:
-            self._watch_stats['failed_watches'] += 1
-        
-        channel_key = f"{channel.name}"
-        if channel_key not in self._watch_stats['channel_performance']:
-            self._watch_stats['channel_performance'][channel_key] = {
-                'successful': 0,
-                'failed': 0,
-                'last_watch': None
-            }
-        
-        if success:
-            self._watch_stats['channel_performance'][channel_key]['successful'] += 1
-        else:
-            self._watch_stats['channel_performance'][channel_key]['failed'] += 1
-        
-        self._watch_stats['channel_performance'][channel_key]['last_watch'] = datetime.now(timezone.utc).isoformat()
-        
-        total = self._watch_stats['successful_watches'] + self._watch_stats['failed_watches']
-        if total % 10 == 0:
-            self._save_watch_stats()
 
 
     def get_adaptive_watch_interval(self) -> float:

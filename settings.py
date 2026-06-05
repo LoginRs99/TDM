@@ -28,8 +28,6 @@ class SettingsFile(TypedDict):
     logging_level: str
     enable_badges_emotes: bool
     available_drops_check: bool
-    # Performance
-    enable_watch_stats: bool
 
 # These defaults ensure the Optimized Logic works immediately
 default_settings: SettingsFile = {
@@ -46,7 +44,6 @@ default_settings: SettingsFile = {
     "logging_level": "INFO",
     "enable_badges_emotes": False,
     "available_drops_check": False,
-    "enable_watch_stats": False,  # Disabled by default for production
 }
 
 
@@ -70,7 +67,6 @@ class Settings:
     maintenance_interval_minutes: int
     enable_badges_emotes: bool
     available_drops_check: bool
-    enable_watch_stats: bool
    
 
     PASSTHROUGH = ("_settings", "_args", "_altered")
@@ -253,7 +249,6 @@ class Settings:
         
         lines.extend([
             f"Logging Level: {self.logging_level}",
-            f"Watch Stats: {'Enabled' if self.enable_watch_stats else 'Disabled'}",
             f"Available Drops Check: {'Enabled' if self.available_drops_check else 'Disabled'}",
         ])
         

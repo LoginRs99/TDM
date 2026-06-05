@@ -6,11 +6,20 @@
 .github/
 .vscode/
 .env
+*.env
 
 # Docker-specific files that shouldn't be in the image context
 Dockerfile
 docker-compose.yml
+docker-compose.*.yml
 .dockerignore
+
+# Host-mounted runtime data. The image should contain app code only.
+files/
+logs/
+metrics.json
+healthcheck.timestamp
+watch_stats.json
 
 # Python virtual environment and cache
 venv/

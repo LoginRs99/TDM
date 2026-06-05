@@ -1,0 +1,28 @@
+# Local environment and secrets
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime files
+*.log
+log.txt
+logs/
+lock.file
+healthcheck.timestamp
+metrics.json
+watch_stats.json
+
+# User-mounted Docker data
+files/*
+!files/settings.json
+
+# Local compose override
+docker-compose.override.yml
+
+# Local build artifacts
+build/
+dist/
+*.spec
