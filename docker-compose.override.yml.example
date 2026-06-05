@@ -11,12 +11,12 @@ services:
     # DEVELOPMENT OVERRIDES
     # ========================================
     
-    # Build configuration (optional)
+    # Local build configuration (optional).
+    # Uncomment when developing locally instead of pulling ghcr.io/loginrs99/tdm:latest.
     # build:
     #   context: .
     #   target: final
-    #   args:
-    #     - PYTHON_VERSION=3.11
+    # image: twitch-drops-miner:local
     
     # Development volumes - mount source code for hot reload
     volumes:

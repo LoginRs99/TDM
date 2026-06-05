@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - master
       - "codex/**"
     tags:
       - "v*"
@@ -50,6 +51,7 @@ jobs:
         with:
           images: ${{ steps.image.outputs.image }}
           tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}

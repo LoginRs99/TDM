@@ -1,12 +1,10 @@
 services:
   twitch-drops-miner:
-    build: .
-    image: twitch-drops-miner:local
+    image: ghcr.io/loginrs99/tdm:latest
+    pull_policy: always
     container_name: twitch-drops-miner
     restart: unless-stopped
     init: true
-    # Fix: Ensure the container has enough shared memory if the miner uses a headless browser
-    shm_size: '256mb'
     environment:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_SUMMARY_INTERVAL=${DISCORD_SUMMARY_INTERVAL:-240}
@@ -14,12 +12,12 @@ services:
       - TZ=${TZ:-UTC}
     
     volumes:
-      # Note: If the app tries to update settings automatically, remove ':ro'
+      # These two files must exist on the host before first start.
+      # Docker creates a directory when a bind-mounted file source is missing.
       - ./files/settings.json:/home/appuser/app/settings.json:ro
       # Login: export Twitch browser cookies in Netscape format to ./files/cookies.jar.
       # Keep this file private and out of git; replace it and restart if Twitch logs out.
       - ./files/cookies.jar:/home/appuser/app/cookies.jar
-      - ./files/watch_stats.json:/home/appuser/app/watch_stats.json
       - ./files/logs:/home/appuser/app/logs
       - type: tmpfs
         target: /tmp
@@ -27,7 +25,6 @@ services:
           size: 50M
 
     sysctls:
-      # Fix: You had an '=' in the probes line, it must be ':'
       net.ipv4.tcp_keepalive_time: 60
       net.ipv4.tcp_keepalive_intvl: 10
       net.ipv4.tcp_keepalive_probes: 5
@@ -39,7 +36,6 @@ services:
         max-file: "2"
 
     healthcheck:
-      # Ensure healthcheck.py exists in your build context!
       test: ["CMD", "python", "healthcheck.py"]
       interval: 60s
       timeout: 10s
