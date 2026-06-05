@@ -430,32 +430,40 @@ class Twitch:
         if not invalid_priority and not invalid_exclude:
             return
 
-        logger.warning(
-            "Some configured game names do not match active Twitch campaign names exactly."
+        logger.info(
+            "Some configured game names are not active Twitch campaign names right now."
         )
         self._log_invalid_game_names("priority", invalid_priority, available_names)
         self._log_invalid_game_names("exclude", invalid_exclude, available_names)
-        logger.info("Active campaign game names: %s", ", ".join(available_names))
+        logger.debug("Active campaign game names: %s", ", ".join(available_names))
 
     @staticmethod
     def _log_invalid_game_names(
         setting_name: str, invalid_names: list[str], available_names: list[str]
     ) -> None:
+        inactive_count = 0
         for name in invalid_names:
-            suggestions = get_close_matches(name, available_names, n=3, cutoff=0.55)
+            suggestions = get_close_matches(name, available_names, n=3, cutoff=0.72)
             if suggestions:
                 logger.warning(
-                    "Unknown %s game %r. Did you mean: %s?",
+                    "Configured %s game %r is not active now. Did you mean: %s?",
                     setting_name,
                     name,
                     ", ".join(repr(suggestion) for suggestion in suggestions),
                 )
             else:
-                logger.warning(
-                    "Unknown %s game %r. Check spelling and capitalization.",
+                inactive_count += 1
+                logger.debug(
+                    "Configured %s game %r is not active in current campaigns.",
                     setting_name,
                     name,
                 )
+        if inactive_count:
+            logger.info(
+                "%d configured %s game(s) are not active right now; keeping them for future campaigns.",
+                inactive_count,
+                setting_name,
+            )
 
     def get_smart_campaigns(self) -> list[DropsCampaign]:
         """
