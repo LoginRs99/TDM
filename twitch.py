@@ -995,7 +995,12 @@ class Twitch:
                         if response and not response.closed:
                             response.close()
                 else:
-                    logger.warning(f"API Error {response.status}. Retrying in {delay:.1f}s.")
+                    logger.warning(
+                        "API Error %d for %s. Retrying in %.1fs.",
+                        response.status,
+                        url,
+                        delay,
+                    )
                     if response:
                         response.close()
             except asyncio.CancelledError:
@@ -1010,7 +1015,12 @@ class Twitch:
                 logger.error(f"Unexpected error in request: {e}")
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(f"Connection error ({type(e).__name__}). Retrying in {delay:.1f}s.")
+                logger.warning(
+                    "Connection error (%s) while requesting %s. Retrying in %.1fs.",
+                    type(e).__name__,
+                    url,
+                    delay,
+                )
                 if response and not response.closed:
                     response.close()
             except Exception as e:

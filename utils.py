@@ -229,20 +229,32 @@ def merge_json(obj: JsonType, template: Mapping[Any, Any]) -> None:
 
 
 def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
-    defaults_dict: JsonType = dict(defaults)
-    if path.exists():
-        with open(path, 'r', encoding="utf8") as file:
-            combined: JsonType = _remove_missing(json.load(file, object_hook=_deserialize))
-        if merge:
-            merge_json(combined, defaults_dict)
-    else:
-        combined = defaults_dict
+    new_path: Path = path.with_name(f"{path.name}.new")
+    combined: JsonType | None = None
+
+    if new_path.exists():
+        try:
+            with new_path.open('r', encoding="utf8") as file:
+                combined = _remove_missing(json.load(file, object_hook=_deserialize))
+        except json.JSONDecodeError:
+            new_path.unlink()
+
+    if combined is None and path.exists():
+        with path.open('r', encoding="utf8") as file:
+            combined = _remove_missing(json.load(file, object_hook=_deserialize))
+
+    if combined is None:
+        combined = dict(defaults)
+    elif merge:
+        merge_json(combined, dict(defaults))
     return cast(_JSON_T, combined)
 
 
 def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) -> None:
-    with open(path, 'w', encoding="utf8") as file:
+    new_path: Path = path.with_name(f"{path.name}.new")
+    with new_path.open('w', encoding="utf8") as file:
         json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
+    new_path.replace(path)
 
 
 class ExponentialBackoff:
@@ -367,7 +379,7 @@ class AwaitableValue(Generic[_T]):
 
 
 class Game:
-    SPECIAL_EVENTS_GAME_ID: int = 509663
+    SPECIAL_GAME_IDS: set[int] = {509663, 509672}
 
     def __init__(self, data: JsonType):
         self.id: int = int(data["id"])
@@ -403,4 +415,4 @@ class Game:
         return slug_text
 
     def is_special_events(self) -> bool:
-        return self.id == self.SPECIAL_EVENTS_GAME_ID
+        return self.id in self.SPECIAL_GAME_IDS
