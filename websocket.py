@@ -350,6 +350,7 @@ class Websocket:
         except (aiohttp.ClientConnectionError, ConnectionResetError):
             ws_logger.debug(f"Websocket[{self._idx}] failed to send (Connection Reset). Requesting reconnect.")
             self.request_reconnect()
+            raise WebsocketClosed(received=False)
         except Exception as e:
             ws_logger.error(f"Websocket[{self._idx}] send error: {e}")
             raise

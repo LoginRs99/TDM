@@ -214,6 +214,8 @@ def merge_json(obj: JsonType, template: Mapping[Any, Any]) -> None:
     # NOTE: This modifies object in place
     for k, v in list(obj.items()):
         if k not in template:
+            if isinstance(k, str) and k.startswith("_"):
+                continue
             # unknown key: overwrite from template
             del obj[k]
         elif type(v) is not type(template[k]):
@@ -252,9 +254,14 @@ def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
 
 def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) -> None:
     new_path: Path = path.with_name(f"{path.name}.new")
-    with new_path.open('w', encoding="utf8") as file:
-        json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
-    new_path.replace(path)
+    try:
+        with new_path.open('w', encoding="utf8") as file:
+            json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
+        new_path.replace(path)
+    except Exception:
+        with suppress(OSError):
+            new_path.unlink()
+        raise
 
 
 class ExponentialBackoff:
