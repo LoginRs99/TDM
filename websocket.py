@@ -281,7 +281,7 @@ class Websocket:
                 
                 try:
                     raw_message: aiohttp.WSMessage = await ws.receive(timeout=remaining)
-                except (aiohttp.ClientConnectionResetError, ConnectionResetError, aiohttp.ClientPayloadError):
+                except (aiohttp.ClientConnectionError, ConnectionResetError, aiohttp.ClientPayloadError):
                     raise WebsocketClosed()
                 
                 ws_logger.debug(f"Websocket[{self._idx}] received: {raw_message.type}")
@@ -347,7 +347,7 @@ class Websocket:
             
             await ws.send_json(message, dumps=json_minify)
             ws_logger.debug(f"Websocket[{self._idx}] sent: {message}")
-        except (aiohttp.ClientConnectionResetError, ConnectionResetError, aiohttp.ClientError):
+        except (aiohttp.ClientConnectionError, ConnectionResetError):
             ws_logger.debug(f"Websocket[{self._idx}] failed to send (Connection Reset). Requesting reconnect.")
             self.request_reconnect()
         except Exception as e:
