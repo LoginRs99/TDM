@@ -44,29 +44,8 @@ class Stream:
         self._stream_url: URLType | None = None
 
     @cached_property
-    def _spade_payload(self) -> "JsonType":
-        payload = [
-            {
-                "event": "minute-watched",
-                "properties": {
-                    "broadcast_id": str(self.broadcast_id),
-                    "channel_id": str(self.channel.id),
-                    "channel": self.channel._login,
-                    "hidden": False,
-                    "live": True,
-                    "location": "channel",
-                    "logged_in": True,
-                    "muted": False,
-                    "player": "site",
-                    "user_id": self.channel._twitch._auth_state.user_id,
-                }
-            }
-        ]
-        return {"data": (b64encode(json_minify(payload).encode("utf8"))).decode("utf8")}
-
-    @cached_property
-    def _gql_payload(self) -> GQLQuery:
-        payload = [
+    def _watch_payload(self) -> "list[JsonType]":
+        return [
             {
                 "event": "minute-watched",
                 "properties": {
@@ -86,12 +65,23 @@ class Stream:
                 }
             }
         ]
+
+    @cached_property
+    def _spade_payload(self) -> "JsonType":
+        return {
+            "data": (b64encode(json_minify(self._watch_payload).encode("utf8"))).decode("utf8")
+        }
+
+    @cached_property
+    def _gql_payload(self) -> GQLQuery:
         return GQLQuery(
             (
                 "\n mutation SendEvents($input: SendSpadeEventsInput!) "
                 "{\n sendSpadeEvents(input: $input) {\n statusCode\n}\n}\n"
             ),
-            b64encode(gzip.compress(json_minify(payload).encode("utf8"))).decode("utf8")
+            b64encode(
+                gzip.compress(json_minify(self._watch_payload).encode("utf8"))
+            ).decode("utf8")
         )
 
     @classmethod
@@ -443,8 +433,8 @@ class Channel:
             self._twitch.on_channel_update(self, old_stream, self._stream)
             needs_display = False  # calling on_channel_update always does a display at the end
 
-    # NOTE: Kept as fallback; not called by the current watch loop.
-    async def _send_watch_spade(self) -> bool:
+    async def send_watch(self) -> bool:
+        """Send watch event via Spade POST. Primary watch method."""
         stream = self._stream  # Capture reference atomically to prevent race condition
         if stream is None:
             return False
@@ -462,8 +452,8 @@ class Channel:
         except RequestException:
             return False
 
-    async def send_watch(self) -> bool:
-        """Send watch event via GQL (sendSpadeEvents mutation). Primary watch method."""
+    # NOTE: Kept as fallback; not called by the current watch loop.
+    async def _send_watch_gql(self) -> bool:
         stream = self._stream  # Capture reference atomically to prevent race condition
         if stream is None:
             return False
