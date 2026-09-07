@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 logger = logging.getLogger("TwitchDrops")
 
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
 class HealthcheckWriter:
     """
     Manages healthcheck timestamp file for Docker health monitoring
@@ -22,8 +25,11 @@ class HealthcheckWriter:
     - ERROR: Optional flag indicating error state
     """
     
-    def __init__(self, healthcheck_path: Path | str = "healthcheck.timestamp"):
-        self.healthcheck_file = Path(healthcheck_path)
+    def __init__(self, healthcheck_path: Path | str | None = None):
+        if healthcheck_path is None:
+            self.healthcheck_file = BASE_DIR / "healthcheck.timestamp"
+        else:
+            self.healthcheck_file = Path(healthcheck_path)
         self.failure_count = 0
         self.max_failures = 3
         self.last_update = 0

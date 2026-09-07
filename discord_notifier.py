@@ -90,8 +90,21 @@ class DiscordNotifier:
                 await asyncio.sleep(60)
     
     async def _check_login_status(self):
-        """Check if the Twitch login is still valid"""
+        """Check if the Twitch login is still valid, and reload if cookies.jar was updated"""
         try:
+            # Check if user placed a fresh cookies.jar file on disk
+            if self.twitch.check_cookies_updated():
+                logger.info("cookies.jar was updated on disk; re-validating login session...")
+                try:
+                    await self.twitch.get_auth()
+                    self._login_status = True
+                    self._last_login_alert = None
+                    await self._send_login_alert(logged_out=False)
+                    self.twitch.change_state(State.INVENTORY_FETCH)
+                    return
+                except Exception as e:
+                    logger.warning(f"Re-authentication with new cookies.jar failed: {e}")
+
             auth_state = self.twitch._auth_state
             
             if not auth_state._hasattrs("access_token", "user_id"):
@@ -189,31 +202,25 @@ class DiscordNotifier:
         total_drops = len(self._pending_drops)
         time_range = self._get_time_range()
         
-        description_parts = [
-            f"**Summary Report** ({time_range})\n",
-            f"**{total_drops} drop{'s' if total_drops != 1 else ''} claimed** across **{len(campaigns_data)} campaign{'s' if len(campaigns_data) != 1 else ''}**\n"
-        ]
+        # Build description safely under Discord's 4096 char limit
+        MAX_DESC_LEN = 3900
+        description_lines = []
+        omitted = 0
+        current_len = 0
         
-        # Add each campaign
-        for campaign_data in sorted(campaigns_data.values(), key=lambda x: x["game"]):
-            game_name = campaign_data["game"]
-            campaign_name = campaign_data["campaign"]
-            progress = campaign_data["progress"]
-            drops = campaign_data["drops"]
-            
-            description_parts.append(
-                f"\n**{game_name}** - {campaign_name}\n"
-                f"Progress: {progress} | Claimed: {len(drops)} drop{'s' if len(drops) != 1 else ''}"
-            )
-            
-            # List individual drops
-            for drop, claim_time in drops:
-                time_str = claim_time.strftime("%H:%M UTC")
-                description_parts.append(f"   - {drop.rewards_text()} ({time_str})")
+        for part in description_parts:
+            if current_len + len(part) + 1 > MAX_DESC_LEN:
+                omitted += 1
+            else:
+                description_lines.append(part)
+                current_len += len(part) + 1
         
+        if omitted > 0:
+            description_lines.append(f"\n*... and {omitted} more entries omitted for length.*")
+
         embed = {
             "title": "Drops Mining Summary",
-            "description": "\n".join(description_parts),
+            "description": "\n".join(description_lines),
             "color": 5793266,  # Twitch Purple
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "footer": {"text": "Twitch Drops Miner"}
@@ -272,6 +279,30 @@ class DiscordNotifier:
         else:
             logger.error("Test notification failed")
         return success
+
+    async def send_startup_alert(self) -> bool:
+        """Send a concise startup notification to Discord if configured"""
+        webhook_url = self.twitch.settings.discord_webhook_url.strip()
+        if not webhook_url:
+            return False
+
+        from version import __version__
+        settings = self.twitch.settings
+
+        embed = {
+            "title": "Twitch Drops Miner Started",
+            "description": (
+                f"**Twitch Drops Miner v{__version__} is now active.**\n\n"
+                f"- **Priority Mode:** `{settings.priority_mode.name}`\n"
+                f"- **Priority Games:** {len(settings.priority)} configured\n"
+                f"- **Excluded Games:** {len(settings.exclude)} configured\n"
+                f"- **Summary Interval:** every {settings.discord_summary_interval_minutes} minutes"
+            ),
+            "color": 3447003,  # Blue
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "footer": {"text": "Twitch Drops Miner - Status"}
+        }
+        return await self._send_webhook({"embeds": [embed]})
     
     async def _send_webhook(self, payload: dict, max_retries: int = 3) -> bool:
         """
