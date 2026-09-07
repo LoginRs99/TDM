@@ -10,8 +10,9 @@ from pathlib import Path
 from time import time
 from datetime import datetime
 
-HEALTHCHECK_FILE = Path("healthcheck.timestamp")
-METRICS_FILE = Path("metrics.json")
+BASE_DIR = Path(__file__).resolve().parent
+HEALTHCHECK_FILE = BASE_DIR / "healthcheck.timestamp"
+METRICS_FILE = BASE_DIR / "metrics.json"
 
 MAX_AGE = 180  # 3 minutes - how old the timestamp can be
 MAX_FAILURES = 3  # Maximum consecutive failures before unhealthy
@@ -98,17 +99,37 @@ def check_metrics() -> tuple[bool, str]:
 
 def main():
     """Run all health checks and report results"""
-    print(f"Running healthcheck at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
+    as_json = "--json" in sys.argv
     
     # Core timestamp check (CRITICAL)
     timestamp_ok, timestamp_msg = check_timestamp()
-    print(f"{'OK' if timestamp_ok else 'FAIL'} Timestamp: {timestamp_msg}")
     
     # Metrics check (INFO ONLY)
     metrics_ok, metrics_msg = check_metrics()
-    print(f"{'OK' if metrics_ok else 'WARN'} Metrics: {metrics_msg}")
     
+    if as_json:
+        metrics_data = None
+        if METRICS_FILE.exists():
+            try:
+                with open(METRICS_FILE, 'r', encoding='utf-8') as f:
+                    metrics_data = json.load(f)
+            except Exception:
+                pass
+        result = {
+            "healthy": timestamp_ok,
+            "timestamp_ok": timestamp_ok,
+            "timestamp_status": timestamp_msg,
+            "metrics_status": metrics_msg,
+            "metrics": metrics_data,
+            "checked_at": datetime.now().isoformat()
+        }
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if timestamp_ok else 1)
+    
+    print(f"Running healthcheck at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+    print(f"{'OK' if timestamp_ok else 'FAIL'} Timestamp: {timestamp_msg}")
+    print(f"{'OK' if metrics_ok else 'WARN'} Metrics: {metrics_msg}")
     print("=" * 60)
     
     # Overall health decision

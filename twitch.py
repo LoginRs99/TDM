@@ -215,6 +215,29 @@ class Twitch:
         self._last_settings_validation_signature: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None = None
         # Initialize Blacklist
         self._channel_blacklist: dict[int, int] = {}
+        try:
+            self._cookies_mtime: float = COOKIES_PATH.stat().st_mtime if COOKIES_PATH.exists() else 0
+        except Exception:
+            self._cookies_mtime = 0
+
+    def check_cookies_updated(self) -> bool:
+        """Check if cookies.jar was replaced on disk and reload session if so."""
+        if not COOKIES_PATH.exists():
+            return False
+        try:
+            mtime = COOKIES_PATH.stat().st_mtime
+            if self._cookies_mtime > 0 and mtime > self._cookies_mtime:
+                logger.info("Detected updated cookies.jar on disk. Reloading session...")
+                self._cookies_mtime = mtime
+                self._auth_state.clear()
+                if self._session and not self._session.closed:
+                    asyncio.create_task(self._session.close())
+                self._session = None
+                return True
+            self._cookies_mtime = mtime
+        except Exception as e:
+            logger.debug(f"Error checking cookies mtime: {e}")
+        return False
         
     @property
     def close_requested(self) -> bool:
@@ -553,6 +576,7 @@ class Twitch:
             f"Excluded={len(self.settings.exclude)}"
         )
         # ------------------------------------
+        await self.discord.send_startup_alert()
         await self.websocket.start()
         
         self._watching_task = asyncio.create_task(self._watch_loop())
