@@ -1107,7 +1107,11 @@ class Twitch:
                             retry = True
                             retry_reason = "temporary Twitch service error"
                             break
-                        if "service timeout" in msg or "service unavailable" in msg:
+                        if (
+                            "service timeout" in msg
+                            or "service unavailable" in msg
+                            or "request cancelled" in msg
+                        ):
                             retry = True
                             retry_reason = "temporary Twitch service outage"
                             break
