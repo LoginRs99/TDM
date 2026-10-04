@@ -3,3 +3,4 @@ yarl
 truststore
 colorama
 psutil
+playwright>=1.40.0

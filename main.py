@@ -41,6 +41,9 @@ if __name__ == "__main__":
         _debug_gql: bool
         log: bool
         dump: bool
+        login: bool
+        refresh_cookies: bool
+        headful: bool
 
         @property
         def debug_ws(self) -> int:
@@ -68,6 +71,21 @@ if __name__ == "__main__":
     parser.add_argument("--log", action="store_true")
     parser.add_argument("--dump", action="store_true")
     parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Launch Playwright browser login flow to create/update cookies.jar",
+    )
+    parser.add_argument(
+        "--refresh-cookies",
+        action="store_true",
+        help="Refresh cookies.jar from persistent browser profile and exit",
+    )
+    parser.add_argument(
+        "--headful",
+        action="store_true",
+        help="Run Playwright browser with visible GUI window instead of headless",
+    )
+    parser.add_argument(
         "--debug-ws", dest="_debug_ws", action="store_true", help=argparse.SUPPRESS
     )
     parser.add_argument(
@@ -80,6 +98,33 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Settings error: {traceback.format_exc()}")
         raise e
+
+    if args.login or args.refresh_cookies:
+        from cookie_refresher import CookieRefresher
+        refresher = CookieRefresher()
+        if args.login:
+            print("Starting Playwright login flow...")
+            uname = settings.twitch_username or ""
+            pwd = settings.twitch_password or ""
+            if not uname:
+                try:
+                    uname = input("Twitch Username (optional, press Enter to enter directly in browser): ").strip()
+                    pwd = input("Twitch Password (optional, press Enter to enter directly in browser): ").strip() if uname else ""
+                except (EOFError, KeyboardInterrupt):
+                    pass
+            success = asyncio.run(
+                refresher.login_with_credentials(
+                    username=uname,
+                    password=pwd,
+                    headless=not args.headful,
+                )
+            )
+        else:
+            print("Refreshing cookies from browser profile...")
+            success = asyncio.run(refresher.refresh_session(headless=not args.headful))
+        
+        print(f"Cookie operation {'SUCCEEDED' if success else 'FAILED'}.")
+        sys.exit(0 if success else 1)
 
     def setup_logging(settings: Settings, args: ParsedArgs) -> logging.Logger:
         """Configure logging with multiple handlers for different purposes"""

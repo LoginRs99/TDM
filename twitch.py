@@ -124,6 +124,28 @@ class _AuthState:
             headers["Authorization"] = f"OAuth {self.access_token}"
         return headers
 
+    async def _try_auto_refresh(self) -> bool:
+        if not getattr(self._twitch.settings, 'auto_cookie_refresh', False):
+            return False
+        try:
+            from cookie_refresher import CookieRefresher
+            logger.info("Attempting automatic cookie refresh via Playwright...")
+            refresher = CookieRefresher(cookies_path=COOKIES_PATH)
+            refreshed = await refresher.refresh_session(headless=True)
+            if not refreshed:
+                uname = getattr(self._twitch.settings, 'twitch_username', '')
+                pwd = getattr(self._twitch.settings, 'twitch_password', '')
+                if uname and pwd:
+                    refreshed = await refresher.login_with_credentials(
+                        username=uname, password=pwd, headless=True
+                    )
+            if refreshed:
+                self._twitch.check_cookies_updated()
+                return True
+        except Exception as e:
+            logger.warning(f"Auto cookie refresh failed: {e}")
+        return False
+
     async def validate(self):
         async with self._lock:
             await self._validate()
@@ -139,21 +161,26 @@ class _AuthState:
         jar = cast(aiohttp.CookieJar, session.cookie_jar)
         client_info: ClientInfo = self._twitch._client_type
 
+        cookie = jar.filter_cookies(client_info.CLIENT_URL)
+        if "unique_id" not in cookie or "auth-token" not in cookie:
+            if await self._try_auto_refresh():
+                session = await self._twitch.get_session()
+                jar = cast(aiohttp.CookieJar, session.cookie_jar)
+                cookie = jar.filter_cookies(client_info.CLIENT_URL)
+
         if not hasattr(self, "device_id"):
-            cookie = jar.filter_cookies(client_info.CLIENT_URL)
             if "unique_id" not in cookie:
                 raise LoginException(
                     f"Device ID (unique_id) not found in {COOKIES_PATH}. "
-                    "Export a fresh Twitch cookies.jar after logging in, then restart the container."
+                    "Export a fresh Twitch cookies.jar or use --login to authenticate."
                 )
             self.device_id = cookie["unique_id"].value
 
         logger.info("Validating session from cookie...")
-        cookie = jar.filter_cookies(client_info.CLIENT_URL)
         if "auth-token" not in cookie:
             raise LoginException(
                 f"Authentication token not found in {COOKIES_PATH}. "
-                "Make sure cookies.jar was exported from an active Twitch browser session."
+                "Make sure cookies.jar was exported or use --login to authenticate."
             )
         
         self.access_token = cookie["auth-token"].value
@@ -163,9 +190,12 @@ class _AuthState:
             headers={"Authorization": f"OAuth {self.access_token}"}
         ) as response:
             if response.status == 401:
+                if await self._try_auto_refresh():
+                    self.clear()
+                    return await self._validate()
                 raise LoginException(
                     "Twitch rejected the cookie login. cookies.jar is invalid or expired. "
-                    "Export a fresh Twitch cookies.jar and restart the container."
+                    "Export a fresh Twitch cookies.jar or use --login to authenticate."
                 )
             
             validate_response = await response.json()

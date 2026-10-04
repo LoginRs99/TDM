@@ -22,17 +22,38 @@ class ConfigValidator:
         self.issues: list[str] = []
         self.warnings: list[str] = []
 
-    def validate_required_files(self) -> bool:
-        """Check that all required files exist"""
+    def validate_required_files(self, settings: Settings | None = None) -> bool:
+        """Check that all required files exist or can be auto-recovered"""
         all_ok = True
         if not COOKIES_PATH.exists():
-            self.issues.append(f"Missing {COOKIES_PATH.name} - Twitch authentication cookies (critical)")
-            all_ok = False
+            # Check for cookies.txt / cookies.json in same dir and auto-convert
+            txt_path = COOKIES_PATH.with_suffix(".txt")
+            json_path = COOKIES_PATH.with_suffix(".json")
+            converted = False
+            for alt_path in (txt_path, json_path):
+                if alt_path.exists():
+                    try:
+                        from cookie_refresher import CookieRefresher
+                        if CookieRefresher.convert_external_cookies_file(alt_path, COOKIES_PATH):
+                            logger.info(f"Automatically converted {alt_path.name} to {COOKIES_PATH.name}")
+                            converted = True
+                            break
+                    except Exception as e:
+                        logger.debug(f"Auto-conversion of {alt_path} failed: {e}")
+
+            if not converted:
+                auto_refresh = getattr(settings, 'auto_cookie_refresh', False) if settings else False
+                browser_profile = COOKIES_PATH.parent / "browser_profile"
+                if auto_refresh or browser_profile.exists():
+                    self.warnings.append(f"{COOKIES_PATH.name} missing, but auto-cookie refresh is enabled")
+                else:
+                    self.issues.append(f"Missing {COOKIES_PATH.name} - Twitch authentication cookies (critical)")
+                    all_ok = False
         if not SETTINGS_PATH.exists():
             self.warnings.append(f"Missing {SETTINGS_PATH.name} - will be created with defaults")
         return all_ok
 
-    def validate_cookies_file(self) -> bool:
+    def validate_cookies_file(self, settings: Settings | None = None) -> bool:
         """
         Validate cookies.jar file.
         IMPORTANT: cookies.jar is a BINARY file (SQLite / pickle / Netscape format).
@@ -41,6 +62,10 @@ class ConfigValidator:
         cookies_path = COOKIES_PATH
 
         if not cookies_path.exists():
+            auto_refresh = getattr(settings, 'auto_cookie_refresh', False) if settings else False
+            browser_profile = COOKIES_PATH.parent / "browser_profile"
+            if auto_refresh or browser_profile.exists():
+                return True
             return False
 
         file_size = cookies_path.stat().st_size
@@ -98,9 +123,9 @@ class ConfigValidator:
         logger.info("Running configuration validation...")
 
         all_ok = True
-        if not self.validate_required_files():
+        if not self.validate_required_files(settings):
             all_ok = False
-        if not self.validate_cookies_file():
+        if not self.validate_cookies_file(settings):
             all_ok = False
         if not self.validate_directories():
             all_ok = False
