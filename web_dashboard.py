@@ -290,6 +290,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+LOGIN_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Twitch Drops Miner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0e0e10] text-gray-200 font-sans min-h-screen flex items-center justify-center p-4">
+    <div class="bg-[#18181b] border border-[#27272a] rounded-xl p-8 max-w-sm w-full shadow-2xl space-y-6">
+        <div class="text-center space-y-2">
+            <div class="w-12 h-12 rounded-xl bg-[#9146FF] mx-auto flex items-center justify-center text-2xl shadow-lg shadow-[#9146FF]/30">
+                ⛏️
+            </div>
+            <h1 class="text-xl font-bold text-white">Twitch Drops Miner</h1>
+            <p class="text-xs text-gray-400">Password protected dashboard</p>
+        </div>
+        <form method="POST" action="/login" class="space-y-4">
+            <div>
+                <label for="password" class="block text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wider">Password</label>
+                <input type="password" id="password" name="password" required autofocus class="w-full px-3.5 py-2.5 bg-[#0e0e10] border border-[#27272a] rounded-lg text-white text-sm focus:outline-none focus:border-[#9146FF] transition" placeholder="Enter dashboard password">
+            </div>
+            <button type="submit" class="w-full py-2.5 bg-[#9146FF] hover:bg-[#772ce8] text-white font-semibold rounded-lg text-sm transition shadow-lg shadow-[#9146FF]/20 active:scale-95">
+                Unlock Dashboard
+            </button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+
 class WebDashboard:
     """Provides Web UI and REST API for Twitch Drops Miner."""
 
@@ -297,17 +329,79 @@ class WebDashboard:
         self.twitch = twitch
         self.host = host
         self.port = port
-        self.app = web.Application()
+        self.password: str = getattr(twitch.settings, "web_password", "").strip()
+        self._last_action_time: float = 0.0
+        
+        # Initialize aiohttp app with security middleware
+        middlewares = [self._security_middleware]
+        self.app = web.Application(middlewares=middlewares)
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
         self._setup_routes()
 
+    @web.middleware
+    async def _security_middleware(self, request: web.Request, handler):
+        # 1. Authentication check (if password is set)
+        if self.password:
+            # Allow POST /login
+            if request.path == "/login" and request.method == "POST":
+                return await handler(request)
+
+            # Check header token, query param, or session cookie
+            auth_header = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+            token_param = request.query.get("token", "").strip()
+            cookie_token = request.cookies.get("tdm_auth", "").strip()
+
+            is_authenticated = (
+                auth_header == self.password
+                or token_param == self.password
+                or cookie_token == self.password
+            )
+
+            if not is_authenticated:
+                if request.path.startswith("/api/"):
+                    response = web.json_response({"error": "Unauthorized"}, status=401)
+                else:
+                    response = web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html", status=401)
+                self._apply_security_headers(response)
+                return response
+
+        # 2. Rate limit on actions
+        if request.path.startswith("/api/action/"):
+            now = asyncio.get_event_loop().time()
+            if now - self._last_action_time < 1.0:
+                response = web.json_response({"error": "Rate limited. Please wait 1 second between actions."}, status=429)
+                self._apply_security_headers(response)
+                return response
+            self._last_action_time = now
+
+        response = await handler(request)
+        self._apply_security_headers(response)
+        return response
+
+    @staticmethod
+    def _apply_security_headers(response: web.Response) -> None:
+        """Apply defensive HTTP security headers to all responses."""
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
     def _setup_routes(self):
         self.app.router.add_get("/", self.handle_index)
+        self.app.router.add_post("/login", self.handle_login)
         self.app.router.add_get("/api/status", self.handle_status)
         self.app.router.add_post("/api/action/switch", self.handle_switch)
         self.app.router.add_post("/api/action/refresh", self.handle_refresh)
         self.app.router.add_post("/api/action/refresh-cookies", self.handle_refresh_cookies)
+
+    async def handle_login(self, request: web.Request) -> web.Response:
+        data = await request.post()
+        submitted = data.get("password", "")
+        if submitted == self.password:
+            response = web.HTTPFound("/")
+            response.set_cookie("tdm_auth", self.password, max_age=86400 * 30, httponly=True, samesite="Lax")
+            return response
+        return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html", status=401)
 
     async def handle_index(self, request: web.Request) -> web.Response:
         return web.Response(text=HTML_TEMPLATE, content_type="text/html")

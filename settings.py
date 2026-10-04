@@ -36,6 +36,7 @@ class SettingsFile(TypedDict):
     web_dashboard: bool
     web_port: int
     web_host: str
+    web_password: str
 
 # These defaults ensure the Optimized Logic works immediately
 default_settings: SettingsFile = {
@@ -60,6 +61,7 @@ default_settings: SettingsFile = {
     "web_dashboard": True,
     "web_port": 8080,
     "web_host": "0.0.0.0",
+    "web_password": "",
 }
 
 
@@ -209,6 +211,10 @@ class Settings:
 
         if host := os.getenv('WEB_HOST'):
             self._settings['web_host'] = host.strip()
+
+        if web_pwd := os.getenv('WEB_PASSWORD'):
+            self._settings['web_password'] = web_pwd.strip()
+            logger.info("Web Dashboard password protection enabled")
     
     def _validate_settings(self):
         """Validate settings values are in acceptable ranges"""

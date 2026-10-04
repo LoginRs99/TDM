@@ -15,7 +15,12 @@
         "exclude": "Optional set of exact game names to skip. Keep empty unless there are games you never want to watch.",
         "priority": "Optional ordered list of exact game names to prefer. Keep empty to let the miner choose automatically.",
         "priority_mode": "How games are selected: 0=PRIORITY_ONLY, 1=ENDING_SOONEST, 2=LOW_AVBL_FIRST, 3=BALANCED. BALANCED is recommended: priority list first, then scarce/urgent connected campaigns, then other active drops.",
-        "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL. Example format is shown in _examples.proxy."
+        "proxy": "Leave blank unless you need an HTTP or SOCKS proxy URL. Example format is shown in _examples.proxy.",
+        "web_dashboard": "Set to true to enable the lightweight Web UI and REST API at http://localhost:8080.",
+        "web_port": "Port to bind the Web Dashboard to (default 8080).",
+        "web_password": "Optional password to protect Web Dashboard and REST API endpoints. Leave empty for open local access.",
+        "discord_bot_token": "Optional Discord Bot Token for 2-way interactive slash commands (/status, /priority, /settings).",
+        "discord_owner_id": "Optional Discord User ID of the owner to restrict bot control commands to. If empty, allows server administrators."
     },
     "_examples": {
         "priority": [
@@ -54,5 +59,10 @@
     "proxy": {
         "__type": "URL",
         "data": ""
-    }
+    },
+    "web_dashboard": true,
+    "web_port": 8080,
+    "web_password": "",
+    "discord_bot_token": "",
+    "discord_owner_id": ""
 }

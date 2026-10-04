@@ -267,6 +267,8 @@ class CookieRefresher:
                     cookies = await context.cookies(["https://www.twitch.tv"])
                     if any(c["name"] == "auth-token" for c in cookies):
                         logger.info("Login successful! auth-token captured.")
+                        SCREENSHOT_2FA_PATH.unlink(missing_ok=True)
+                        TOKEN_2FA_PATH.unlink(missing_ok=True)
                         return self.save_cookies_list(cookies, self.cookies_path)
                     await asyncio.sleep(2)
 

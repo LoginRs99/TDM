@@ -24,7 +24,10 @@ WORKDIR /home/appuser/app
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install --with-deps chromium && chmod -R 777 /ms-playwright
+RUN playwright install --with-deps chromium \
+    && chown -R appuser:appuser /ms-playwright \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 # Need these ENVs in final stage too for runtime
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -39,6 +42,9 @@ COPY . .
 RUN chown -R appuser:appuser /home/appuser/app
 
 USER appuser
+
+EXPOSE 8080
+STOPSIGNAL SIGTERM
 
 # Healthcheck: Runs every 60s. If it fails 3 times (3 minutes), Docker marks container as "unhealthy"
 # (You can use autoheal containers to restart it automatically)
