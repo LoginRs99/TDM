@@ -257,6 +257,14 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.warning(f"Could not start Web Dashboard: {e}")
 
+        discord_bot = None
+        if getattr(settings, "discord_bot_token", "").strip():
+            try:
+                from discord_bot import start_discord_bot
+                discord_bot = await start_discord_bot(client)
+            except Exception as e:
+                logger.warning(f"Could not start Discord Bot: {e}")
+
         try:
             logger.info("Starting Twitch Drops Miner...")
             await client.run()
@@ -289,6 +297,13 @@ if __name__ == "__main__":
             metrics.record_error("fatal_exception")
         finally:
             logger.info("Shutting down gracefully...")
+
+            if discord_bot:
+                try:
+                    from discord_bot import stop_discord_bot
+                    await stop_discord_bot()
+                except Exception as e:
+                    logger.debug(f"Error stopping Discord Bot: {e}")
 
             if dashboard_runner:
                 try:
