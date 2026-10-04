@@ -11,6 +11,9 @@ services:
       - PRIORITY_MODE=${PRIORITY_MODE:-BALANCED}
       - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
       - MAINTENANCE_INTERVAL_MINUTES=${MAINTENANCE_INTERVAL_MINUTES:-20}
+      - AUTO_COOKIE_REFRESH=${AUTO_COOKIE_REFRESH:-true}
+      - TWITCH_USERNAME=${TWITCH_USERNAME:-}
+      - TWITCH_PASSWORD=${TWITCH_PASSWORD:-}
       - PYTHONUNBUFFERED=1
       - TZ=${TZ:-UTC}
     
@@ -22,6 +25,7 @@ services:
       # Keep this file private and out of git; replace it and restart if Twitch logs out.
       - ./files/cookies.jar:/home/appuser/app/cookies.jar
       - ./files/logs:/home/appuser/app/logs
+      - ./files/browser_profile:/home/appuser/app/files/browser_profile
       - type: tmpfs
         target: /tmp
         tmpfs:

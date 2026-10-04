@@ -41,6 +41,7 @@
     "logging_level": "INFO",
     "enable_badges_emotes": false,
     "available_drops_check": false,
+    "auto_cookie_refresh": true,
     "exclude": {
         "__type": "set",
         "data": []

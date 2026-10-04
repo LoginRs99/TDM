@@ -28,6 +28,9 @@ class SettingsFile(TypedDict):
     logging_level: str
     enable_badges_emotes: bool
     available_drops_check: bool
+    auto_cookie_refresh: bool
+    twitch_username: str
+    twitch_password: str
 
 # These defaults ensure the Optimized Logic works immediately
 default_settings: SettingsFile = {
@@ -44,6 +47,9 @@ default_settings: SettingsFile = {
     "logging_level": "INFO",
     "enable_badges_emotes": False,
     "available_drops_check": False,
+    "auto_cookie_refresh": False,
+    "twitch_username": "",
+    "twitch_password": "",
 }
 
 
@@ -161,6 +167,17 @@ class Settings:
                 logger.info(f"Priority mode set to {priority_mode}")
             else:
                 logger.warning(f"Invalid PRIORITY_MODE: '{priority_mode}'")
+
+        # Auto Cookie Refresh via Playwright
+        if auto_refresh := os.getenv('AUTO_COOKIE_REFRESH'):
+            self._settings['auto_cookie_refresh'] = auto_refresh.lower() in ('1', 'true', 'yes')
+            logger.info(f"Auto cookie refresh: {self._settings['auto_cookie_refresh']}")
+
+        if username := os.getenv('TWITCH_USERNAME'):
+            self._settings['twitch_username'] = username.strip()
+
+        if password := os.getenv('TWITCH_PASSWORD'):
+            self._settings['twitch_password'] = password.strip()
     
     def _validate_settings(self):
         """Validate settings values are in acceptable ranges"""
