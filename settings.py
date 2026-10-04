@@ -25,6 +25,8 @@ class SettingsFile(TypedDict):
     # Discord / Logging
     discord_webhook_url: str
     discord_summary_interval_minutes: int
+    discord_bot_token: str
+    discord_owner_id: str
     logging_level: str
     enable_badges_emotes: bool
     available_drops_check: bool
@@ -47,6 +49,8 @@ default_settings: SettingsFile = {
     "stale_stream_timeout_minutes": 5,
     "discord_webhook_url": "",
     "discord_summary_interval_minutes": 60,
+    "discord_bot_token": "",
+    "discord_owner_id": "",
     "logging_level": "INFO",
     "enable_badges_emotes": False,
     "available_drops_check": False,
@@ -108,6 +112,14 @@ class Settings:
                     "DISCORD_WEBHOOK_URL doesn't look valid - ignoring. "
                     "Should start with: https://discord.com/api/webhooks/"
                 )
+
+        # Discord Interactive Bot Token & Owner ID
+        if bot_token := os.getenv('DISCORD_BOT_TOKEN'):
+            self._settings['discord_bot_token'] = bot_token.strip()
+            logger.info("Discord Bot Token loaded from environment")
+
+        if owner_id := os.getenv('DISCORD_OWNER_ID'):
+            self._settings['discord_owner_id'] = owner_id.strip()
         
         # Discord Summary Interval
         if interval := os.getenv('DISCORD_SUMMARY_INTERVAL'):

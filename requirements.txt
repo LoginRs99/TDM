@@ -4,3 +4,4 @@ truststore
 colorama
 psutil
 playwright>=1.40.0
+discord.py>=2.3.0
