@@ -251,10 +251,12 @@ class Twitch:
         
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is not None and not self._session.closed:
-            # Refresh session every 6 hours instead of 12 for better stability
-            if time() - self._session_created > 43200:
-                logger.info("Refreshing HTTP session (12h maintenance)")
-                self._session = None  # Just orphan it, let GC clean up
+            # Refresh session every 6 hours for better stability
+            if time() - self._session_created > 21600:
+                logger.info("Refreshing HTTP session (6h maintenance)")
+                old_session = self._session
+                self._session = None
+                asyncio.create_task(old_session.close())
         
         if self._session is None or self._session.closed:
             cookie_jar = aiohttp.CookieJar()
@@ -299,6 +301,9 @@ class Twitch:
         for task in tasks_to_cancel:
             if task:
                 task.cancel()
+        active_tasks = [task for task in tasks_to_cancel if task]
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
         
         await self.discord.stop()
         await self.websocket.stop(clear_topics=True)
@@ -314,7 +319,9 @@ class Twitch:
         
         self._drops.clear(); self.channels.clear(); self.inventory.clear()
         self._auth_state.clear(); self.wanted_games.clear(); self._mnt_triggers.clear()
-        await asyncio.sleep(start_time + 0.5 - time())
+        remaining = start_time + 0.5 - time()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
     async def run(self):
         if self.settings.dump:

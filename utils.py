@@ -423,3 +423,5 @@ class Game:
 
     def is_special_events(self) -> bool:
         return self.id in self.SPECIAL_GAME_IDS
+
+    is_special = is_special_events
