@@ -14,8 +14,13 @@ services:
       - AUTO_COOKIE_REFRESH=${AUTO_COOKIE_REFRESH:-true}
       - TWITCH_USERNAME=${TWITCH_USERNAME:-}
       - TWITCH_PASSWORD=${TWITCH_PASSWORD:-}
+      - WEB_DASHBOARD=${WEB_DASHBOARD:-true}
+      - WEB_PORT=${WEB_PORT:-8080}
       - PYTHONUNBUFFERED=1
       - TZ=${TZ:-UTC}
+
+    ports:
+      - "8080:8080"
     
     volumes:
       # These two files must exist on the host before first start.

@@ -245,6 +245,18 @@ if __name__ == "__main__":
                 signal.signal(sig, lambda s, f: signal_handler(s))
         # -------------------------------------------
         
+        dashboard_runner = None
+        if getattr(settings, "web_dashboard", True):
+            try:
+                from web_dashboard import start_web_dashboard
+                dashboard_runner = await start_web_dashboard(
+                    client,
+                    host=getattr(settings, "web_host", "0.0.0.0"),
+                    port=getattr(settings, "web_port", 8080),
+                )
+            except Exception as e:
+                logger.warning(f"Could not start Web Dashboard: {e}")
+
         try:
             logger.info("Starting Twitch Drops Miner...")
             await client.run()
@@ -277,11 +289,18 @@ if __name__ == "__main__":
             metrics.record_error("fatal_exception")
         finally:
             logger.info("Shutting down gracefully...")
-            
+
+            if dashboard_runner:
+                try:
+                    from web_dashboard import stop_web_dashboard
+                    await stop_web_dashboard()
+                except Exception as e:
+                    logger.debug(f"Error stopping Web Dashboard: {e}")
+
             # Print metrics summary before shutdown
             if metrics:
                 logger.info("\n" + metrics.get_summary())
-            
+
             await client.shutdown()
         
         if not client.close_requested:

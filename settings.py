@@ -31,6 +31,9 @@ class SettingsFile(TypedDict):
     auto_cookie_refresh: bool
     twitch_username: str
     twitch_password: str
+    web_dashboard: bool
+    web_port: int
+    web_host: str
 
 # These defaults ensure the Optimized Logic works immediately
 default_settings: SettingsFile = {
@@ -50,6 +53,9 @@ default_settings: SettingsFile = {
     "auto_cookie_refresh": False,
     "twitch_username": "",
     "twitch_password": "",
+    "web_dashboard": True,
+    "web_port": 8080,
+    "web_host": "0.0.0.0",
 }
 
 
@@ -178,6 +184,19 @@ class Settings:
 
         if password := os.getenv('TWITCH_PASSWORD'):
             self._settings['twitch_password'] = password.strip()
+
+        # Web Dashboard
+        if web_enabled := os.getenv('WEB_DASHBOARD'):
+            self._settings['web_dashboard'] = web_enabled.lower() in ('1', 'true', 'yes')
+
+        if port := os.getenv('WEB_PORT'):
+            try:
+                self._settings['web_port'] = int(port)
+            except ValueError:
+                pass
+
+        if host := os.getenv('WEB_HOST'):
+            self._settings['web_host'] = host.strip()
     
     def _validate_settings(self):
         """Validate settings values are in acceptable ranges"""
