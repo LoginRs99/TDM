@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
+from constants import State
+
 if TYPE_CHECKING:
     from twitch import Twitch
     from inventory import TimedDrop
@@ -202,6 +204,26 @@ class DiscordNotifier:
         total_drops = len(self._pending_drops)
         time_range = self._get_time_range()
         
+        description_parts = [
+            f"**Summary Report** ({time_range})\n",
+            f"**{total_drops} drop{'s' if total_drops != 1 else ''} claimed** across **{len(campaigns_data)} campaign{'s' if len(campaigns_data) != 1 else ''}**\n"
+        ]
+
+        for campaign_data in sorted(campaigns_data.values(), key=lambda x: x["game"]):
+            game_name = campaign_data["game"]
+            campaign_name = campaign_data["campaign"]
+            progress = campaign_data["progress"]
+            drops = campaign_data["drops"]
+
+            description_parts.append(
+                f"\n**{game_name}** - {campaign_name}\n"
+                f"Progress: {progress} | Claimed: {len(drops)} drop{'s' if len(drops) != 1 else ''}"
+            )
+
+            for drop, claim_time in drops:
+                time_str = claim_time.strftime("%H:%M UTC")
+                description_parts.append(f"   - {drop.rewards_text()} ({time_str})")
+
         # Build description safely under Discord's 4096 char limit
         MAX_DESC_LEN = 3900
         description_lines = []

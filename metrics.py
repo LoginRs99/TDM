@@ -125,13 +125,15 @@ class Metrics:
         return "\n".join(lines)
     
     def _save_metrics(self):
-        """Save metrics to disk"""
+        """Save metrics to disk atomically"""
         if not self.metrics_path:
             return
         
         try:
-            with open(self.metrics_path, 'w', encoding='utf-8') as f:
+            temp_path = self.metrics_path.with_suffix(".tmp")
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.get_stats(), f, indent=2)
+            temp_path.replace(self.metrics_path)
         except Exception as e:
             logger.debug(f"Failed to save metrics: {e}")
     
