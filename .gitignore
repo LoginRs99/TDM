@@ -14,6 +14,8 @@ lock.file
 healthcheck.timestamp
 metrics.json
 watch_stats.json
+2fa.token
+login_2fa.png
 
 # User-mounted Docker data
 files/*

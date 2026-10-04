@@ -37,7 +37,7 @@ class StatusView(discord.ui.View):
         self.bot_service = bot_service
 
     def _check_auth(self, interaction: discord.Interaction) -> bool:
-        return self.bot_service.is_authorized(interaction.user.id)
+        return self.bot_service.is_authorized(interaction)
 
     @discord.ui.button(label="Switch Channel", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="tdm_btn_switch")
     async def switch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -113,7 +113,7 @@ class ModeSelect(discord.ui.Select):
         super().__init__(placeholder="Select Priority Mode...", options=options, custom_id="tdm_select_mode")
 
     async def callback(self, interaction: discord.Interaction):
-        if not self.bot_service.is_authorized(interaction.user.id):
+        if not self.bot_service.is_authorized(interaction):
             await interaction.response.send_message("⛔ Not authorized.", ephemeral=True)
             return
 
@@ -150,10 +150,14 @@ class DiscordBotService:
         self._task: asyncio.Task | None = None
         self._setup_events_and_commands()
 
-    def is_authorized(self, user_id: int) -> bool:
-        if not self.owner_id:
+    def is_authorized(self, interaction: discord.Interaction) -> bool:
+        if self.owner_id:
+            return str(interaction.user.id) == self.owner_id
+        # Fallback if owner_id not set: allow only server administrators or DMs with bot
+        if interaction.guild is None:
             return True
-        return str(user_id) == self.owner_id
+        perms = getattr(interaction.user, "guild_permissions", None)
+        return bool(perms and perms.administrator)
 
     def _setup_events_and_commands(self):
         bot = self.bot
@@ -282,7 +286,7 @@ class DiscordBotService:
         @priority_group.command(name="add", description="Add a game to the priority list")
         @app_commands.autocomplete(game=game_autocomplete)
         async def priority_add(interaction: discord.Interaction, game: str):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
@@ -305,7 +309,7 @@ class DiscordBotService:
         @priority_group.command(name="remove", description="Remove a game from the priority list")
         @app_commands.autocomplete(game=priority_autocomplete)
         async def priority_remove(interaction: discord.Interaction, game: str):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
@@ -324,7 +328,7 @@ class DiscordBotService:
 
         @priority_group.command(name="clear", description="Clear all priority games")
         async def priority_clear(interaction: discord.Interaction):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
@@ -361,7 +365,7 @@ class DiscordBotService:
         @exclude_group.command(name="add", description="Exclude a game from being watched")
         @app_commands.autocomplete(game=game_autocomplete)
         async def exclude_add(interaction: discord.Interaction, game: str):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
@@ -377,7 +381,7 @@ class DiscordBotService:
         @exclude_group.command(name="remove", description="Remove a game from excluded list")
         @app_commands.autocomplete(game=exclude_autocomplete)
         async def exclude_remove(interaction: discord.Interaction, game: str):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
@@ -395,6 +399,10 @@ class DiscordBotService:
         # --- /settings Command ---
         @bot.tree.command(name="settings", description="View and configure miner settings interactively")
         async def cmd_settings(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
             settings = service.twitch.settings
             embed = discord.Embed(
                 title="⚙️ Twitch Drops Miner - Settings",
@@ -413,11 +421,16 @@ class DiscordBotService:
         # --- /2fa Command ---
         @bot.tree.command(name="2fa", description="Provide 2FA token for Playwright login")
         async def cmd_2fa(interaction: discord.Interaction, code: str):
-            if not service.is_authorized(interaction.user.id):
+            if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
-            token_clean = code.strip()
+            import re
+            token_clean = re.sub(r'[^a-zA-Z0-9]', '', code.strip())
+            if not token_clean or len(token_clean) > 16:
+                await interaction.response.send_message("❌ Invalid 2FA code format. Must be alphanumeric (max 16 chars).", ephemeral=True)
+                return
+
             TOKEN_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
             TOKEN_2FA_PATH.write_text(token_clean, encoding="utf-8")
             await interaction.response.send_message(f"🔐 2FA token `{token_clean}` delivered to Playwright login runner!", ephemeral=True)

@@ -39,9 +39,16 @@ services:
       - LOGGING_LEVEL=DEBUG  # DEBUG, INFO, WARNING, ERROR
       - PYTHONUNBUFFERED=1
       
-      # Discord notifications (set your webhook here)
+      # Discord notifications & Interactive Bot
       # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
       # - DISCORD_SUMMARY_INTERVAL=60  # minutes
+      # - DISCORD_BOT_TOKEN=your_bot_token_here
+      # - DISCORD_OWNER_ID=your_discord_user_id_here
+      
+      # Web Dashboard (:8080)
+      # - WEB_DASHBOARD=true
+      # - WEB_PORT=8080
+      # - WEB_PASSWORD=your_secret_password_here
       
       # Performance tuning
       # - MAINTENANCE_INTERVAL_MINUTES=15
