@@ -234,11 +234,11 @@ def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
     new_path: Path = path.with_name(f"{path.name}.new")
     combined: JsonType | None = None
 
-    if path.exists():
+    if path.is_file():
         with path.open('r', encoding="utf8") as file:
             combined = _remove_missing(json.load(file, object_hook=_deserialize))
 
-    if combined is None and new_path.exists():
+    if combined is None and new_path.is_file():
         try:
             with new_path.open('r', encoding="utf8") as file:
                 combined = _remove_missing(json.load(file, object_hook=_deserialize))

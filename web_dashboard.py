@@ -6,12 +6,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
 from constants import State
+from cookie_refresher import SCREENSHOT_2FA_PATH, TOKEN_2FA_PATH
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 if TYPE_CHECKING:
     from twitch import Twitch
@@ -56,16 +64,47 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <p class="text-xs text-gray-400">Headless Docker Farm</p>
             </div>
         </div>
-        <div class="flex items-center space-x-4">
+        <div class="flex items-center space-x-3">
+            <span id="mem-badge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-purple-300 border border-gray-700 hidden sm:inline">
+                RAM: --
+            </span>
             <span id="state-badge" class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400 border border-gray-700">
                 Connecting...
             </span>
             <span id="uptime-text" class="text-xs text-gray-400 hidden sm:inline">Uptime: --</span>
+            <a id="logout-link" href="/logout" class="text-xs text-red-400/80 hover:text-red-400 border border-red-900/50 hover:border-red-700/80 px-2.5 py-1 rounded transition hidden" title="Logout">
+                🚪 Logout
+            </a>
         </div>
     </header>
 
     <!-- Main Container -->
     <main class="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        <!-- 2FA Remote Solver Banner (Shown when challenge is active) -->
+        <div id="banner-2fa" class="hidden bg-yellow-950/40 border-2 border-yellow-500/70 rounded-xl p-5 shadow-2xl relative space-y-4">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-lg bg-yellow-500/20 text-yellow-400 flex items-center justify-center text-xl font-bold border border-yellow-500/30">
+                        🔐
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-yellow-300">Twitch 2FA Challenge Required!</h3>
+                        <p class="text-xs text-yellow-200/70">Enter the verification code sent to your email or authenticator app.</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2 w-full sm:w-auto">
+                    <input id="input-2fa" type="text" maxlength="16" placeholder="Enter 2FA Code" class="px-3 py-2 bg-black/70 border border-yellow-500/50 rounded-lg text-white text-sm focus:outline-none focus:border-yellow-400 w-full sm:w-44 text-center font-mono tracking-widest uppercase">
+                    <button onclick="submit2FA()" class="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded-lg text-xs transition active:scale-95 whitespace-nowrap shadow-lg shadow-yellow-500/20">
+                        Submit
+                    </button>
+                </div>
+            </div>
+            <div id="container-2fa-screenshot" class="text-center pt-2 border-t border-yellow-500/20 hidden">
+                <p class="text-[11px] text-yellow-400/80 mb-2 font-mono">Twitch Challenge Screen:</p>
+                <img id="img-2fa" src="/api/2fa/screenshot" class="max-h-60 mx-auto rounded border border-yellow-500/40 shadow-md" alt="2FA Screen" />
+            </div>
+        </div>
+
         <!-- Live Status Card -->
         <div class="bg-twitch-card border border-twitch-border rounded-xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
             <div class="absolute top-0 left-0 w-2 h-full bg-twitch-purple"></div>
@@ -104,6 +143,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                     <div class="flex justify-between text-xs text-gray-400">
                         <span id="drop-minutes">0 / 0 min</span>
+                        <span id="drop-eta" class="text-twitch-purple/90 font-medium">ETA: --</span>
                         <span id="campaign-drops-count">Drops: 0/0</span>
                     </div>
                 </div>
@@ -163,6 +203,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
     </main>
 
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2 pointer-events-none flex flex-col items-end"></div>
+
     <!-- Footer -->
     <footer class="text-center py-4 text-xs text-gray-500 border-t border-twitch-border/40 mt-auto">
         Twitch Drops Miner Headless &bull; Auto-refreshing every 3s
@@ -178,8 +221,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 updateUI(data);
             } catch (err) {
                 console.error("Dashboard poll failed", err);
-                document.getElementById('state-badge').innerText = 'Offline';
-                document.getElementById('state-badge').className = 'px-3 py-1 rounded-full text-xs font-semibold bg-red-900/40 text-red-400 border border-red-800';
+                const badge = document.getElementById('state-badge');
+                badge.innerText = 'Offline';
+                badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-red-900/40 text-red-400 border border-red-800';
             }
         }
 
@@ -193,6 +237,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-red-900/40 text-red-400 border border-red-800';
             } else {
                 badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-green-900/40 text-green-300 border border-green-800';
+            }
+
+            // 2FA Challenge Check
+            const banner2fa = document.getElementById('banner-2fa');
+            const containerScreenshot = document.getElementById('container-2fa-screenshot');
+            if (data.two_factor_pending) {
+                banner2fa.classList.remove('hidden');
+                containerScreenshot.classList.remove('hidden');
+                document.getElementById('img-2fa').src = `/api/2fa/screenshot?t=${Date.now()}`;
+            } else {
+                banner2fa.classList.add('hidden');
+                containerScreenshot.classList.add('hidden');
+            }
+
+            // RAM and Logout
+            if (data.system && data.system.memory_mb) {
+                const memBadge = document.getElementById('mem-badge');
+                memBadge.innerText = `RAM: ${data.system.memory_mb} MB`;
+                memBadge.classList.remove('hidden');
+            }
+            if (data.has_password) {
+                document.getElementById('logout-link').classList.remove('hidden');
             }
 
             // Channel & Game
@@ -217,11 +283,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 document.getElementById('progress-bar').style.width = `${data.drop.progress_percent}%`;
                 document.getElementById('drop-minutes').innerText = `${data.drop.current_minutes} / ${data.drop.required_minutes} min`;
                 document.getElementById('campaign-drops-count').innerText = `Campaign Drops: ${data.drop.campaign_claimed}/${data.drop.campaign_total}`;
+                
+                const remaining = Math.max(0, data.drop.required_minutes - data.drop.current_minutes);
+                document.getElementById('drop-eta').innerText = remaining > 0 ? `ETA: ~${remaining} min` : 'Ready to claim!';
             } else {
                 document.getElementById('drop-name').innerText = 'No active drop';
                 document.getElementById('drop-percent').innerText = '0%';
                 document.getElementById('progress-bar').style.width = '0%';
                 document.getElementById('drop-minutes').innerText = '0 / 0 min';
+                document.getElementById('drop-eta').innerText = 'ETA: --';
                 document.getElementById('campaign-drops-count').innerText = 'Drops: 0/0';
             }
 
@@ -263,22 +333,63 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function triggerAction(action) {
-            const msg = document.getElementById('action-msg');
-            msg.innerText = 'Sending command...';
-            msg.className = 'text-xs text-yellow-400 self-center ml-2';
-            msg.classList.remove('hidden');
-
+            showToast("Sending command...", "info");
             try {
                 const res = await fetch(`/api/action/${action}`, { method: 'POST' });
                 const json = await res.json();
-                msg.innerText = json.message || 'Action executed';
-                msg.className = 'text-xs text-green-400 self-center ml-2';
-                setTimeout(() => fetchStatus(), 500);
+                if (res.ok) {
+                    showToast(json.message || 'Action executed successfully', 'success');
+                    setTimeout(() => fetchStatus(), 500);
+                } else {
+                    showToast(json.error || 'Action failed', 'error');
+                }
             } catch (err) {
-                msg.innerText = 'Action failed';
-                msg.className = 'text-xs text-red-400 self-center ml-2';
+                showToast('Failed to reach miner server', 'error');
             }
-            setTimeout(() => msg.classList.add('hidden'), 4000);
+        }
+
+        async function submit2FA() {
+            const input = document.getElementById('input-2fa');
+            const code = input.value.trim();
+            if (!code) {
+                showToast("Please enter the 2FA code", "error");
+                return;
+            }
+            try {
+                const res = await fetch('/api/action/submit-2fa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const json = await res.json();
+                if (res.ok) {
+                    showToast(json.message || "2FA code submitted!", "success");
+                    input.value = "";
+                    setTimeout(fetchStatus, 1000);
+                } else {
+                    showToast(json.error || "Failed to submit 2FA code", "error");
+                }
+            } catch (err) {
+                showToast("Network error submitting 2FA code", "error");
+            }
+        }
+
+        function showToast(text, type = "info") {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'error' ? 'bg-red-900/90 border-red-500 text-red-200' :
+                            type === 'success' ? 'bg-green-900/90 border-green-500 text-green-200' :
+                            'bg-gray-800/90 border-gray-600 text-gray-200';
+            toast.className = `px-4 py-2.5 rounded-lg border text-xs font-semibold shadow-xl transition-all duration-300 opacity-0 translate-y-2 pointer-events-auto flex items-center space-x-2 ${bgClass}`;
+            toast.innerHTML = `<span>${type === 'error' ? '⚠️' : type === 'success' ? '✅' : 'ℹ️'}</span><span>${text}</span>`;
+            container.appendChild(toast);
+            requestAnimationFrame(() => {
+                toast.classList.remove('opacity-0', 'translate-y-2');
+            });
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
         }
 
         // Start polling every 3 seconds
@@ -343,8 +454,8 @@ class WebDashboard:
     async def _security_middleware(self, request: web.Request, handler):
         # 1. Authentication check (if password is set)
         if self.password:
-            # Allow POST /login
-            if request.path == "/login" and request.method == "POST":
+            # Allow public unauthenticated endpoints: /login, /logout, /api/health
+            if request.path in ("/login", "/logout", "/api/health"):
                 return await handler(request)
 
             # Check header token, query param, or session cookie
@@ -388,11 +499,20 @@ class WebDashboard:
 
     def _setup_routes(self):
         self.app.router.add_get("/", self.handle_index)
+        self.app.router.add_get("/login", self.handle_login_page)
         self.app.router.add_post("/login", self.handle_login)
+        self.app.router.add_get("/logout", self.handle_logout)
+        self.app.router.add_get("/api/health", self.handle_health)
         self.app.router.add_get("/api/status", self.handle_status)
+        self.app.router.add_get("/api/2fa/status", self.handle_2fa_status)
+        self.app.router.add_get("/api/2fa/screenshot", self.handle_2fa_screenshot)
+        self.app.router.add_post("/api/action/submit-2fa", self.handle_submit_2fa)
         self.app.router.add_post("/api/action/switch", self.handle_switch)
         self.app.router.add_post("/api/action/refresh", self.handle_refresh)
         self.app.router.add_post("/api/action/refresh-cookies", self.handle_refresh_cookies)
+
+    async def handle_login_page(self, request: web.Request) -> web.Response:
+        return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html")
 
     async def handle_login(self, request: web.Request) -> web.Response:
         data = await request.post()
@@ -402,6 +522,27 @@ class WebDashboard:
             response.set_cookie("tdm_auth", self.password, max_age=86400 * 30, httponly=True, samesite="Lax")
             return response
         return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html", status=401)
+
+    async def handle_logout(self, request: web.Request) -> web.Response:
+        response = web.HTTPFound("/login")
+        response.del_cookie("tdm_auth")
+        return response
+
+    async def handle_health(self, request: web.Request) -> web.Response:
+        """Public health check endpoint for Docker/Portainer/monitors."""
+        state_name = self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN"
+        watching_channel = self.twitch.watching_channel.get_with_default(None)
+        uptime = 0.0
+        if metrics := getattr(self.twitch, "metrics", None):
+            uptime = metrics.get_stats().get("uptime_hours", 0.0)
+
+        return web.json_response({
+            "status": "healthy",
+            "state": state_name,
+            "channel": watching_channel.name if watching_channel else None,
+            "uptime_hours": uptime,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
     async def handle_index(self, request: web.Request) -> web.Response:
         return web.Response(text=HTML_TEMPLATE, content_type="text/html")
@@ -457,6 +598,14 @@ class WebDashboard:
         if metrics := getattr(self.twitch, "metrics", None):
             metrics_stats = metrics.get_stats()
 
+        # System Memory Info
+        memory_mb = None
+        if psutil:
+            try:
+                memory_mb = round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
+            except Exception:
+                pass
+
         data = {
             "state": self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN",
             "priority_mode": self.twitch.settings.priority_mode.name,
@@ -464,9 +613,50 @@ class WebDashboard:
             "drop": drop_data,
             "campaigns": campaigns_data,
             "metrics": metrics_stats,
+            "system": {
+                "memory_mb": memory_mb,
+            },
+            "has_password": bool(self.password),
+            "two_factor_pending": SCREENSHOT_2FA_PATH.exists(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         return web.json_response(data)
+
+    async def handle_2fa_status(self, request: web.Request) -> web.Response:
+        """Returns whether a 2FA challenge is currently pending."""
+        return web.json_response({
+            "pending": SCREENSHOT_2FA_PATH.exists(),
+            "has_screenshot": SCREENSHOT_2FA_PATH.exists(),
+            "has_token": TOKEN_2FA_PATH.exists(),
+        })
+
+    async def handle_2fa_screenshot(self, request: web.Request) -> web.Response:
+        """Returns the 2FA login challenge screenshot if available."""
+        if SCREENSHOT_2FA_PATH.exists():
+            return web.FileResponse(SCREENSHOT_2FA_PATH)
+        return web.Response(status=404, text="No active 2FA challenge screenshot found.")
+
+    async def handle_submit_2fa(self, request: web.Request) -> web.Response:
+        """Receives and stores 2FA code in files/2fa.token."""
+        code = ""
+        if request.content_type == "application/json":
+            try:
+                body = await request.json()
+                code = str(body.get("code", ""))
+            except Exception:
+                pass
+        else:
+            data = await request.post()
+            code = str(data.get("code", ""))
+
+        code_clean = re.sub(r'[^a-zA-Z0-9]', '', code.strip())
+        if not code_clean or len(code_clean) > 16:
+            return web.json_response({"error": "Invalid 2FA code format."}, status=400)
+
+        TOKEN_2FA_PATH.parent.mkdir(parents=True, exist_ok=True)
+        TOKEN_2FA_PATH.write_text(code_clean, encoding="utf-8")
+        logger.info(f"Web Dashboard: Received and stored 2FA token '{code_clean}'")
+        return web.json_response({"status": "ok", "message": "2FA code submitted successfully!"})
 
     async def handle_switch(self, request: web.Request) -> web.Response:
         """Forces channel switch."""

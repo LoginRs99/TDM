@@ -23,6 +23,7 @@ services:
       - TZ=${TZ:-UTC}
 
     stop_grace_period: 30s
+    shm_size: '256mb'
     security_opt:
       - "no-new-privileges:true"
 
