@@ -180,127 +180,148 @@ class DiscordBotService:
         # --- /status Command ---
         @bot.tree.command(name="status", description="Show live mining status, current channel and progress")
         async def cmd_status(interaction: discord.Interaction):
-            wc = service.twitch.watching_channel.get_with_default(None)
-            state_name = service.twitch._state.name if hasattr(service.twitch, "_state") else "UNKNOWN"
-            mode_name = service.twitch.settings.priority_mode.name
+            await interaction.response.defer()
+            try:
+                wc = service.twitch.watching_channel.get_with_default(None)
+                state_name = service.twitch._state.name if hasattr(service.twitch, "_state") else "UNKNOWN"
+                mode_raw = getattr(service.twitch.settings, "priority_mode", "BALANCED")
+                mode_name = mode_raw.name if hasattr(mode_raw, "name") else str(mode_raw)
 
-            embed = discord.Embed(
-                title="⛏️ Twitch Drops Miner - Live Status",
-                color=0x9146FF if wc else 0x36393F,
-                timestamp=datetime.now(timezone.utc),
-            )
-            embed.add_field(name="Status", value=f"`{state_name}`", inline=True)
-            embed.add_field(name="Mode", value=f"`{mode_name}`", inline=True)
+                embed = discord.Embed(
+                    title="⛏️ Twitch Drops Miner - Live Status",
+                    color=0x9146FF if wc else 0x36393F,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="Status", value=f"`{state_name}`", inline=True)
+                embed.add_field(name="Mode", value=f"`{mode_name}`", inline=True)
 
-            if metrics := getattr(service.twitch, "metrics", None):
-                stats = metrics.get_stats()
-                embed.add_field(name="Uptime", value=f"{stats.get('uptime_hours', 0):.1f}h", inline=True)
-                embed.add_field(name="Claimed", value=str(stats.get("drops_claimed", 0)), inline=True)
-                embed.add_field(name="Success Rate", value=f"{stats.get('watch_success_rate', 100):.0f}%", inline=True)
-                embed.add_field(name="Total Watched", value=f"{stats.get('total_minutes_watched', 0)} min", inline=True)
+                if metrics := getattr(service.twitch, "metrics", None):
+                    stats = metrics.get_stats()
+                    embed.add_field(name="Uptime", value=f"{stats.get('uptime_hours', 0):.1f}h", inline=True)
+                    embed.add_field(name="Claimed", value=str(stats.get("drops_claimed", 0)), inline=True)
+                    embed.add_field(name="Success Rate", value=f"{stats.get('watch_success_rate', 100):.0f}%", inline=True)
+                    embed.add_field(name="Total Watched", value=f"{stats.get('total_minutes_watched', 0)} min", inline=True)
 
-            if wc:
-                embed.add_field(name="📺 Channel", value=f"[{wc.name}]({wc.url})", inline=True)
-                embed.add_field(name="🎮 Game", value=wc.game.name if wc.game else "N/A", inline=True)
+                if wc:
+                    embed.add_field(name="📺 Channel", value=f"[{wc.name}]({wc.url})", inline=True)
+                    embed.add_field(name="🎮 Game", value=wc.game.name if getattr(wc, "game", None) else "N/A", inline=True)
 
-                active_campaign = service.twitch.get_active_campaign(wc)
-                if active_campaign and active_campaign.active_drop:
-                    drop = active_campaign.active_drop
-                    pct = int(drop.progress * 100) if drop.progress else 0
-                    bar = make_progress_bar(pct, 12)
-                    embed.add_field(
-                        name=f"🎁 Drop: {drop.name}",
-                        value=f"`{bar}` **{pct}%** ({drop.current_minutes}/{drop.required_minutes}m)\n"
-                              f"Rewards: *{drop.rewards_text()}*\n"
-                              f"Campaign: **{active_campaign.claimed_drops}/{active_campaign.total_drops}** claimed",
-                        inline=False,
-                    )
-            else:
-                embed.add_field(name="📺 Channel", value="*Idle / Searching for streams...*", inline=False)
+                    active_campaign = None
+                    try:
+                        active_campaign = service.twitch.get_active_campaign(wc)
+                    except Exception:
+                        pass
 
-            view = StatusView(service)
-            await interaction.response.send_message(embed=embed, view=view)
+                    if active_campaign and getattr(active_campaign, "active_drop", None):
+                        drop = active_campaign.active_drop
+                        pct = int(drop.progress * 100) if drop.progress else 0
+                        bar = make_progress_bar(pct, 12)
+                        rewards = drop.rewards_text() if hasattr(drop, "rewards_text") else "Drop reward"
+                        embed.add_field(
+                            name=f"🎁 Drop: {drop.name}",
+                            value=f"`{bar}` **{pct}%** ({drop.current_minutes}/{drop.required_minutes}m)\n"
+                                  f"Rewards: *{rewards}*\n"
+                                  f"Campaign: **{active_campaign.claimed_drops}/{active_campaign.total_drops}** claimed",
+                            inline=False,
+                        )
+                else:
+                    embed.add_field(name="📺 Channel", value="*Idle / Searching for streams...*", inline=False)
+
+                view = StatusView(service)
+                await interaction.followup.send(embed=embed, view=view)
+            except Exception as e:
+                logger.error(f"Error in /status command: {e}", exc_info=True)
+                await interaction.followup.send(f"⚠️ Error retrieving status: {e}", ephemeral=True)
 
         # --- /games Command ---
         @bot.tree.command(name="games", description="List active Twitch drop campaigns, priority and excluded status")
         async def cmd_games(interaction: discord.Interaction):
-            now = datetime.now(timezone.utc)
-            priority_set = set(service.twitch.settings.priority)
-            exclude_set = service.twitch.settings.exclude
+            await interaction.response.defer()
+            try:
+                now = datetime.now(timezone.utc)
+                priority_set = set(service.twitch.settings.priority)
+                exclude_set = service.twitch.settings.exclude
 
-            embed = discord.Embed(
-                title="🎮 Twitch Drops Campaigns Overview",
-                color=0x5865F2,
-                timestamp=now,
-            )
+                embed = discord.Embed(
+                    title="🎮 Twitch Drops Campaigns Overview",
+                    color=0x5865F2,
+                    timestamp=now,
+                )
 
-            lines = []
-            for c in sorted(service.twitch.inventory, key=lambda x: (x.game.name not in priority_set, x.ends_at)):
-                hours = (c.ends_at - now).total_seconds() / 3600
-                time_str = f"{hours:.1f}h left" if hours > 0 else "Ending"
-                
-                if c.game.name in priority_set:
-                    prefix = "⭐ **[PRIORITY]**"
-                elif c.game.name in exclude_set:
-                    prefix = "🚫 **[EXCLUDED]**"
+                lines = []
+                for c in sorted(service.twitch.inventory, key=lambda x: (x.game.name not in priority_set, x.ends_at)):
+                    hours = (c.ends_at - now).total_seconds() / 3600
+                    time_str = f"{hours:.1f}h left" if hours > 0 else "Ending"
+                    
+                    if c.game.name in priority_set:
+                        prefix = "⭐ **[PRIORITY]**"
+                    elif c.game.name in exclude_set:
+                        prefix = "🚫 **[EXCLUDED]**"
+                    else:
+                        prefix = "•"
+
+                    lines.append(f"{prefix} **{c.game.name}**: {c.name} ({c.claimed_drops}/{c.total_drops} drops, {time_str})")
+
+                if not lines:
+                    embed.description = "No active campaigns found in current inventory."
                 else:
-                    prefix = "•"
+                    desc = "\n".join(lines[:25])
+                    if len(lines) > 25:
+                        desc += f"\n*... and {len(lines) - 25} more campaigns*"
+                    embed.description = desc
 
-                lines.append(f"{prefix} **{c.game.name}**: {c.name} ({c.claimed_drops}/{c.total_drops} drops, {time_str})")
-
-            if not lines:
-                embed.description = "No active campaigns found in current inventory."
-            else:
-                # Truncate if over discord 4096 desc limit
-                desc = "\n".join(lines[:25])
-                if len(lines) > 25:
-                    desc += f"\n*... and {len(lines) - 25} more campaigns*"
-                embed.description = desc
-
-            await interaction.response.send_message(embed=embed)
+                await interaction.followup.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Error in /games command: {e}", exc_info=True)
+                await interaction.followup.send(f"⚠️ Error retrieving campaigns: {e}", ephemeral=True)
 
         # --- /drops Command ---
         @bot.tree.command(name="drops", description="Show detailed drop progress across active campaigns")
         async def cmd_drops(interaction: discord.Interaction):
-            now = datetime.now(timezone.utc)
-            priority_set = set(service.twitch.settings.priority)
+            await interaction.response.defer()
+            try:
+                now = datetime.now(timezone.utc)
+                priority_set = set(service.twitch.settings.priority)
 
-            embed = discord.Embed(
-                title="🎁 Active Drops Progress",
-                color=0x9146FF,
-                timestamp=now,
-            )
-
-            fields_count = 0
-            for camp in sorted(service.twitch.inventory, key=lambda x: (x.game.name not in priority_set, x.ends_at)):
-                if not camp.drops:
-                    continue
-
-                active_drop = camp.active_drop
-                claimed = camp.claimed_drops
-                total = camp.total_drops
-                prio_tag = " ⭐" if camp.game.name in priority_set else ""
-
-                if active_drop:
-                    pct = int(active_drop.progress * 100) if active_drop.progress else 0
-                    bar = make_progress_bar(pct, 8)
-                    drop_info = f"`{bar}` **{pct}%** ({active_drop.current_minutes}/{active_drop.required_minutes}m)\n*{active_drop.name}*"
-                else:
-                    drop_info = f"Completed ({claimed}/{total} claimed)" if claimed == total else f"Waiting ({claimed}/{total} claimed)"
-
-                embed.add_field(
-                    name=f"{camp.game.name}{prio_tag}",
-                    value=f"**{camp.name}**\n{drop_info}",
-                    inline=False,
+                embed = discord.Embed(
+                    title="🎁 Active Drops Progress",
+                    color=0x9146FF,
+                    timestamp=now,
                 )
-                fields_count += 1
-                if fields_count >= 10:  # Discord embed field limit safety
-                    break
 
-            if fields_count == 0:
-                embed.description = "No active drop campaigns found."
+                fields_count = 0
+                for camp in sorted(service.twitch.inventory, key=lambda x: (x.game.name not in priority_set, x.ends_at)):
+                    if not camp.drops:
+                        continue
 
-            await interaction.response.send_message(embed=embed)
+                    active_drop = camp.active_drop
+                    claimed = camp.claimed_drops
+                    total = camp.total_drops
+                    prio_tag = " ⭐" if camp.game.name in priority_set else ""
+
+                    if active_drop:
+                        pct = int(active_drop.progress * 100) if active_drop.progress else 0
+                        bar = make_progress_bar(pct, 8)
+                        drop_info = f"`{bar}` **{pct}%** ({active_drop.current_minutes}/{active_drop.required_minutes}m)\n*{active_drop.name}*"
+                    else:
+                        drop_info = f"Completed ({claimed}/{total} claimed)" if claimed == total else f"Waiting ({claimed}/{total} claimed)"
+
+                    embed.add_field(
+                        name=f"{camp.game.name}{prio_tag}",
+                        value=f"**{camp.name}**\n{drop_info}",
+                        inline=False,
+                    )
+                    fields_count += 1
+                    if fields_count >= 10:  # Discord embed field limit safety
+                        break
+
+                if fields_count == 0:
+                    embed.description = "No active drop campaigns found."
+
+                await interaction.followup.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Error in /drops command: {e}", exc_info=True)
+                await interaction.followup.send(f"⚠️ Error retrieving drops: {e}", ephemeral=True)
 
         # --- /help Command ---
         @bot.tree.command(name="help", description="Show overview of available Twitch Drops Miner bot commands")
