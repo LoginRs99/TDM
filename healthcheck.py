@@ -19,10 +19,26 @@ MAX_FAILURES = 3  # Maximum consecutive failures before unhealthy
 MAX_METRICS_AGE = 600  # 10 minutes - max age for metrics file
 
 
+def check_http_health() -> tuple[bool, str]:
+    """Check if the Web Dashboard /api/health endpoint is responding"""
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8080/api/health", headers={"User-Agent": "Docker-Healthcheck"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                return True, "Web Dashboard /api/health 200 OK"
+            return False, f"HTTP status {resp.status}"
+    except Exception as e:
+        return False, f"HTTP unreachable: {e}"
+
+
 def check_timestamp() -> tuple[bool, str]:
-    """Check if the main process is updating its timestamp"""
+    """Check if the main process is updating its timestamp or responding via HTTP"""
     if not HEALTHCHECK_FILE.exists():
-        return False, "Healthcheck file missing (startup in progress?)"
+        http_ok, http_msg = check_http_health()
+        if http_ok:
+            return True, f"HTTP active ({http_msg})"
+        return False, "Healthcheck file missing and HTTP endpoint not responding"
     
     try:
         content = HEALTHCHECK_FILE.read_text().strip()
@@ -37,6 +53,10 @@ def check_timestamp() -> tuple[bool, str]:
         
         # Check if timestamp is stale
         if age > MAX_AGE:
+            # Fallback to HTTP check
+            http_ok, http_msg = check_http_health()
+            if http_ok:
+                return True, f"Timestamp stale ({age:.0f}s) but HTTP healthy ({http_msg})"
             return False, f"Timestamp stale: {age:.0f}s old (max: {MAX_AGE}s)"
         
         # Check if too many failures

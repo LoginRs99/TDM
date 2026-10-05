@@ -148,6 +148,8 @@ class DiscordBotService:
         intents = discord.Intents.default()
         self.bot = commands.Bot(command_prefix="!", intents=intents)
         self._task: asyncio.Task | None = None
+        self._2fa_task: asyncio.Task | None = None
+        self._2fa_alert_sent: bool = False
         self._setup_events_and_commands()
 
     def is_authorized(self, interaction: discord.Interaction) -> bool:
@@ -171,6 +173,9 @@ class DiscordBotService:
                 logger.info(f"Synced {len(synced)} Discord slash commands")
             except Exception as e:
                 logger.error(f"Failed to sync slash commands: {e}")
+
+            if service._2fa_task is None or service._2fa_task.done():
+                service._2fa_task = asyncio.create_task(service._monitor_2fa_loop())
 
         # --- /status Command ---
         @bot.tree.command(name="status", description="Show live mining status, current channel and progress")
@@ -253,6 +258,63 @@ class DiscordBotService:
                 embed.description = desc
 
             await interaction.response.send_message(embed=embed)
+
+        # --- /drops Command ---
+        @bot.tree.command(name="drops", description="Show detailed drop progress across active campaigns")
+        async def cmd_drops(interaction: discord.Interaction):
+            now = datetime.now(timezone.utc)
+            priority_set = set(service.twitch.settings.priority)
+
+            embed = discord.Embed(
+                title="🎁 Active Drops Progress",
+                color=0x9146FF,
+                timestamp=now,
+            )
+
+            fields_count = 0
+            for camp in sorted(service.twitch.inventory, key=lambda x: (x.game.name not in priority_set, x.ends_at)):
+                if not camp.drops:
+                    continue
+
+                active_drop = camp.active_drop
+                claimed = camp.claimed_drops
+                total = camp.total_drops
+                prio_tag = " ⭐" if camp.game.name in priority_set else ""
+
+                if active_drop:
+                    pct = int(active_drop.progress * 100) if active_drop.progress else 0
+                    bar = make_progress_bar(pct, 8)
+                    drop_info = f"`{bar}` **{pct}%** ({active_drop.current_minutes}/{active_drop.required_minutes}m)\n*{active_drop.name}*"
+                else:
+                    drop_info = f"Completed ({claimed}/{total} claimed)" if claimed == total else f"Waiting ({claimed}/{total} claimed)"
+
+                embed.add_field(
+                    name=f"{camp.game.name}{prio_tag}",
+                    value=f"**{camp.name}**\n{drop_info}",
+                    inline=False,
+                )
+                fields_count += 1
+                if fields_count >= 10:  # Discord embed field limit safety
+                    break
+
+            if fields_count == 0:
+                embed.description = "No active drop campaigns found."
+
+            await interaction.response.send_message(embed=embed)
+
+        # --- /help Command ---
+        @bot.tree.command(name="help", description="Show overview of available Twitch Drops Miner bot commands")
+        async def cmd_help(interaction: discord.Interaction):
+            embed = discord.Embed(
+                title="📖 Twitch Drops Miner - Commands",
+                color=0x5865F2,
+                description="Interactive Discord bot commands to monitor and control your headless drop miner.",
+            )
+            embed.add_field(name="📊 Status & Drops", value="`/status` - Live stream status, progress bar and action buttons\n`/games` - Overview of all campaigns and priority/excluded flags\n`/drops` - Detailed progress for active drop campaigns", inline=False)
+            embed.add_field(name="⭐ Priority Management", value="`/priority list` - Show current priority game order\n`/priority add <game>` - Add a game to priority list\n`/priority remove <game>` - Remove a game from priority list\n`/priority clear` - Clear entire priority list", inline=False)
+            embed.add_field(name="🚫 Excluded Games", value="`/exclude list` - Show excluded games\n`/exclude add <game>` - Blacklist a game\n`/exclude remove <game>` - Unblacklist a game", inline=False)
+            embed.add_field(name="⚙️ Configuration & 2FA", value="`/settings` - Interactive settings viewer & priority mode selector\n`/2fa <code>` - Submit 2FA code for headless Playwright login", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # --- /priority Group ---
         priority_group = app_commands.Group(name="priority", description="Manage game priority list")
@@ -435,6 +497,36 @@ class DiscordBotService:
             TOKEN_2FA_PATH.write_text(token_clean, encoding="utf-8")
             await interaction.response.send_message(f"🔐 2FA token `{token_clean}` delivered to Playwright login runner!", ephemeral=True)
 
+    async def _monitor_2fa_loop(self):
+        """Monitors for 2FA challenge screenshots and proactively alerts owner via Discord DM."""
+        await self.bot.wait_until_ready()
+        from cookie_refresher import SCREENSHOT_2FA_PATH
+        while not self.bot.is_closed():
+            try:
+                if SCREENSHOT_2FA_PATH.exists():
+                    if not self._2fa_alert_sent and self.owner_id:
+                        self._2fa_alert_sent = True
+                        try:
+                            owner = await self.bot.fetch_user(int(self.owner_id))
+                            if owner:
+                                file = discord.File(str(SCREENSHOT_2FA_PATH), filename="twitch_2fa.png")
+                                embed = discord.Embed(
+                                    title="🔐 Twitch 2FA Verification Required!",
+                                    description="Twitch login requires a two-factor verification code.\n\nPlease reply here with `/2fa <CODE>` to authenticate!",
+                                    color=0xFEE75C,
+                                    timestamp=datetime.now(timezone.utc),
+                                )
+                                embed.set_image(url="attachment://twitch_2fa.png")
+                                await owner.send(embed=embed, file=file)
+                                logger.info(f"Proactive 2FA alert sent to Discord owner {self.owner_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to send proactive 2FA Discord alert: {e}")
+                else:
+                    self._2fa_alert_sent = False
+            except Exception as e:
+                logger.debug(f"2FA monitor loop exception: {e}")
+            await asyncio.sleep(3)
+
     async def start(self):
         if not self.token:
             logger.info("Discord Bot Token not configured. Interactive Bot disabled.")
@@ -444,6 +536,8 @@ class DiscordBotService:
         self._task = asyncio.create_task(self.bot.start(self.token))
 
     async def stop(self):
+        if self._2fa_task and not self._2fa_task.done():
+            self._2fa_task.cancel()
         if self.bot and not self.bot.is_closed():
             await self.bot.close()
             logger.info("Discord Bot stopped")

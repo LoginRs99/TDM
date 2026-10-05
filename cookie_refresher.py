@@ -25,6 +25,16 @@ DEFAULT_PROFILE_DIR = WORKING_DIR / "files" / "browser_profile"
 SCREENSHOT_2FA_PATH = WORKING_DIR / "files" / "login_2fa.png"
 TOKEN_2FA_PATH = WORKING_DIR / "files" / "2fa.token"
 
+# Essential Chromium flags for reliable operation in Linux Docker/Portainer environments
+DEFAULT_CHROME_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+]
+
 
 class CookieRefresher:
     """Manages Twitch login and cookies extraction via Playwright."""
@@ -37,6 +47,11 @@ class CookieRefresher:
         self.cookies_path = Path(cookies_path)
         self.user_data_dir = Path(user_data_dir)
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def is_2fa_pending(cls) -> bool:
+        """Returns True if a 2FA challenge is currently waiting for user verification."""
+        return SCREENSHOT_2FA_PATH.exists()
 
     @staticmethod
     def _parse_netscape_cookies(content: str) -> list[dict[str, Any]]:
@@ -139,15 +154,10 @@ class CookieRefresher:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-            ]
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=str(self.user_data_dir),
                 headless=headless,
-                args=args,
+                args=DEFAULT_CHROME_ARGS,
                 viewport={"width": 1280, "height": 720},
             )
 
@@ -200,15 +210,10 @@ class CookieRefresher:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-            ]
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=str(self.user_data_dir),
                 headless=headless,
-                args=args,
+                args=DEFAULT_CHROME_ARGS,
                 viewport={"width": 1280, "height": 720},
             )
 
