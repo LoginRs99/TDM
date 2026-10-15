@@ -163,6 +163,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <span>🔐</span>
                     <span>Refresh Cookies (Playwright)</span>
                 </button>
+                <button onclick="triggerAction('toggle-notifications')" class="px-4 py-2 bg-purple-900/20 hover:bg-purple-900/30 text-purple-300 border border-purple-700/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5" title="Toggle Discord webhook notifications ON or OFF">
+                    <span>🔔</span>
+                    <span id="label-notifications">Discord: Alerts</span>
+                </button>
                 <span id="action-msg" class="text-xs text-green-400 self-center hidden ml-2"></span>
             </div>
         </div>
@@ -259,6 +263,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
             if (data.has_password) {
                 document.getElementById('logout-link').classList.remove('hidden');
+            }
+
+            // Discord notifications button
+            if (data.discord) {
+                const label = document.getElementById('label-notifications');
+                if (label) {
+                    if (!data.discord.has_webhook) {
+                        label.innerText = 'Discord: No URL';
+                    } else if (data.discord.enabled) {
+                        label.innerText = 'Discord Alerts: ON';
+                    } else {
+                        label.innerText = 'Discord Alerts: OFF';
+                    }
+                }
             }
 
             // Channel & Game
@@ -510,6 +528,7 @@ class WebDashboard:
         self.app.router.add_post("/api/action/switch", self.handle_switch)
         self.app.router.add_post("/api/action/refresh", self.handle_refresh)
         self.app.router.add_post("/api/action/refresh-cookies", self.handle_refresh_cookies)
+        self.app.router.add_post("/api/action/toggle-notifications", self.handle_toggle_notifications)
 
     async def handle_login_page(self, request: web.Request) -> web.Response:
         return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html")
@@ -616,6 +635,11 @@ class WebDashboard:
             "system": {
                 "memory_mb": memory_mb,
             },
+            "discord": {
+                "enabled": getattr(self.twitch.settings, "discord_notifications_enabled", True),
+                "has_webhook": bool(self.twitch.settings.discord_webhook_url.strip()),
+                "interval_minutes": self.twitch.settings.discord_summary_interval_minutes,
+            },
             "has_password": bool(self.password),
             "two_factor_pending": SCREENSHOT_2FA_PATH.exists(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -686,6 +710,19 @@ class WebDashboard:
         except Exception as e:
             logger.error(f"Web Dashboard cookie refresh error: {e}")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def handle_toggle_notifications(self, request: web.Request) -> web.Response:
+        """Toggles Discord webhook notifications on or off."""
+        current = getattr(self.twitch.settings, "discord_notifications_enabled", True)
+        new_state = not current
+        self.twitch.discord.set_enabled(new_state)
+        status_str = "ENABLED" if new_state else "DISABLED"
+        logger.info(f"Web Dashboard: Discord notifications {status_str}")
+        return web.json_response({
+            "status": "ok",
+            "enabled": new_state,
+            "message": f"Discord notifications {status_str.lower()}!"
+        })
 
     async def start(self):
         """Starts the aiohttp web server."""

@@ -373,5 +373,54 @@ class TestSettingsIntervals(unittest.TestCase):
                 self.assertTrue(settings.discord_notifications_enabled)
 
 
+class TestWebDashboardAndHealthcheck(unittest.TestCase):
+    def test_dashboard_toggle_notifications(self):
+        """Verify Web Dashboard toggle-notifications endpoint toggles notifier state"""
+        from web_dashboard import WebDashboard
+        
+        mock_settings = MagicMock()
+        mock_settings.discord_notifications_enabled = True
+        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/1/abc"
+        mock_settings.discord_summary_interval_minutes = 60
+        mock_settings.web_password = ""
+
+        mock_discord = MagicMock()
+        def toggle_side_effect(val):
+            mock_settings.discord_notifications_enabled = val
+            return val
+        mock_discord.set_enabled.side_effect = toggle_side_effect
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+        mock_twitch.discord = mock_discord
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        
+        loop = asyncio.new_event_loop()
+        try:
+            req = MagicMock()
+            resp = loop.run_until_complete(dashboard.handle_toggle_notifications(req))
+            import json
+            data = json.loads(resp.text)
+            self.assertEqual(data["status"], "ok")
+            self.assertFalse(data["enabled"])
+            mock_discord.set_enabled.assert_called_with(False)
+        finally:
+            loop.close()
+
+    def test_healthcheck_port_env(self):
+        """Verify healthcheck check_http_health reads WEB_PORT from environment"""
+        from healthcheck import check_http_health
+        with patch.dict("os.environ", {"WEB_PORT": "9090"}), \
+             patch("urllib.request.urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+            ok, msg = check_http_health()
+            self.assertTrue(ok)
+            self.assertIn("9090", msg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
