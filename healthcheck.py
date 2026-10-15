@@ -21,15 +21,17 @@ MAX_METRICS_AGE = 600  # 10 minutes - max age for metrics file
 
 def check_http_health() -> tuple[bool, str]:
     """Check if the Web Dashboard /api/health endpoint is responding"""
+    import os
     import urllib.request
+    port = os.getenv("WEB_PORT", "8080").strip() or "8080"
     try:
-        req = urllib.request.Request("http://127.0.0.1:8080/api/health", headers={"User-Agent": "Docker-Healthcheck"})
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", headers={"User-Agent": "Docker-Healthcheck"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             if resp.status == 200:
-                return True, "Web Dashboard /api/health 200 OK"
+                return True, f"Web Dashboard /api/health ({port}) 200 OK"
             return False, f"HTTP status {resp.status}"
     except Exception as e:
-        return False, f"HTTP unreachable: {e}"
+        return False, f"HTTP unreachable ({port}): {e}"
 
 
 def check_timestamp() -> tuple[bool, str]:
