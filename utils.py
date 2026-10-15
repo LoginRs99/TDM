@@ -5,6 +5,8 @@ import os
 import re
 import sys
 import json
+import errno
+import shutil
 import random
 import string
 import asyncio
@@ -257,7 +259,18 @@ def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) ->
     try:
         with new_path.open('w', encoding="utf8") as file:
             json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
-        new_path.replace(path)
+        try:
+            new_path.replace(path)
+        except OSError as e:
+            # In Docker containers where a single file is bind-mounted, replace()
+            # fails with [Errno 16] EBUSY (Device or resource busy).
+            # Fall back to copying the content directly into the existing file target.
+            if getattr(e, "errno", None) in (errno.EBUSY, errno.EXDEV, errno.EPERM):
+                shutil.copyfile(new_path, path)
+                with suppress(OSError):
+                    new_path.unlink()
+            else:
+                raise
     except Exception:
         with suppress(OSError):
             new_path.unlink()

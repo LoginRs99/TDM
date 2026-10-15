@@ -332,7 +332,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div class="bg-twitch-dark/60 border border-twitch-border rounded-lg p-3 hover:border-twitch-purple/50 transition">
                         <div class="flex items-center justify-between mb-1.5">
                             <span class="text-xs font-bold text-white truncate max-w-[180px]">${c.game}</span>
-                            <span class="text-[10px] font-semibold px-2 py-0.5 rounded ${c.is_priority ? 'bg-twitch-purple/20 text-twitch-purple border border-twitch-purple/30' : 'bg-gray-800 text-gray-400'}">${c.is_priority ? 'Priority' : 'Normal'}</span>
+                            <span class="text-[10px] font-semibold px-2 py-0.5 rounded ${c.is_priority ? 'bg-twitch-purple/20 text-twitch-purple border border-twitch-purple/30' : 'bg-gray-800 text-gray-400'}">${c.is_priority ? (c.priority_rank ? `#${c.priority_rank} Priority` : 'Priority') : 'Normal'}</span>
                         </div>
                         <p class="text-xs text-gray-300 font-medium truncate mb-2">${c.name}</p>
                         <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden mb-1.5">
@@ -597,18 +597,24 @@ class WebDashboard:
             }
 
         # 3. Campaigns List
-        now = datetime.now(timezone.utc)
-        priority_games = set(self.twitch.settings.priority)
-        for camp in sorted(self.twitch.inventory, key=lambda c: (c.game.name not in priority_games, c.ends_at)):
+        priority_list = self.twitch.settings.priority
+        priority_set = set(priority_list)
+        for camp in sorted(self.twitch.inventory, key=lambda c: (
+            0 if c.game.name in priority_set else 1,
+            priority_list.index(c.game.name) if c.game.name in priority_set else 0,
+            c.ends_at,
+        )):
             hours_left = (camp.ends_at - now).total_seconds() / 3600
             time_left_str = f"{hours_left:.1f}h left" if hours_left > 0 else "Ending"
+            rank = (priority_list.index(camp.game.name) + 1) if camp.game.name in priority_set else None
             campaigns_data.append({
                 "game": camp.game.name,
                 "name": camp.name,
                 "claimed": camp.claimed_drops,
                 "total": camp.total_drops,
                 "progress_percent": int(camp.progress * 100),
-                "is_priority": camp.game.name in priority_games,
+                "is_priority": camp.game.name in priority_set,
+                "priority_rank": rank,
                 "time_left": time_left_str,
             })
 

@@ -325,6 +325,16 @@ class TestDiscordBotCommands(unittest.TestCase):
         self.assertIn("test", sub_names)
         self.assertIn("weekly", sub_names)
 
+        # Check subcommands of /priority
+        prio_group = next(cmd for cmd in service.bot.tree.get_commands() if cmd.name == "priority")
+        prio_sub_names = [c.name for c in prio_group.commands]
+        self.assertIn("list", prio_sub_names)
+        self.assertIn("add", prio_sub_names)
+        self.assertIn("move", prio_sub_names)
+        self.assertIn("top", prio_sub_names)
+        self.assertIn("remove", prio_sub_names)
+        self.assertIn("clear", prio_sub_names)
+
 
 class DummyArgs:
     pass
@@ -420,6 +430,68 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
             ok, msg = check_http_health()
             self.assertTrue(ok)
             self.assertIn("9090", msg)
+
+
+class TestJsonSaveAndPriorityRanking(unittest.TestCase):
+    def test_json_save_ebusy_fallback(self):
+        """Verify json_save handles Docker bind-mount EBUSY error with shutil.copyfile fallback"""
+        import tempfile
+        import errno
+        from pathlib import Path
+        from utils import json_save
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "settings.json"
+            target_path.write_text("{}", encoding="utf8")
+
+            # Mock replace to raise EBUSY
+            original_replace = Path.replace
+            replace_called = []
+
+            def mock_replace(self, target):
+                replace_called.append(True)
+                err = OSError("Device or resource busy")
+                err.errno = errno.EBUSY
+                raise err
+
+            data_to_save = {"priority": ["Rust", "Sea of Thieves"], "test": True}
+
+            with patch.object(Path, "replace", side_effect=mock_replace, autospec=True):
+                # Should not raise; should succeed via shutil.copyfile
+                json_save(target_path, data_to_save)
+
+            self.assertTrue(replace_called)
+            import json
+            loaded = json.loads(target_path.read_text(encoding="utf8"))
+            self.assertEqual(loaded["priority"], ["Rust", "Sea of Thieves"])
+            self.assertTrue(loaded["test"])
+            # Ensure .new was cleaned up
+            new_path = target_path.with_name(f"{target_path.name}.new")
+            self.assertFalse(new_path.exists())
+
+    def test_priority_ranking_add_and_move_logic(self):
+        """Verify ranking operations: add with rank, move rank, top promotion"""
+        priority = ["Rust", "Apex Legends", "Valorant"]
+
+        # Insert new game at rank 2 (index 1)
+        new_game = "Overwatch 2"
+        rank = 2
+        target_idx = max(0, min(rank - 1, len(priority)))
+        priority.insert(target_idx, new_game)
+        self.assertEqual(priority, ["Rust", "Overwatch 2", "Apex Legends", "Valorant"])
+
+        # Move Valorant from rank 4 to rank 1
+        game_to_move = "Valorant"
+        priority.remove(game_to_move)
+        target_idx = max(0, min(1 - 1, len(priority)))
+        priority.insert(target_idx, game_to_move)
+        self.assertEqual(priority, ["Valorant", "Rust", "Overwatch 2", "Apex Legends"])
+
+        # Promote Apex Legends to top (rank 1)
+        game_to_top = "Apex Legends"
+        priority.remove(game_to_top)
+        priority.insert(0, game_to_top)
+        self.assertEqual(priority[0], "Apex Legends")
 
 
 if __name__ == "__main__":

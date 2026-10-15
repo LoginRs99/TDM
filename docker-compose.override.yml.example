@@ -21,7 +21,7 @@ services:
     # Development volumes - mount source code for hot reload
     volumes:
       # Override the default volumes if needed
-      - ./files/settings.json:/home/appuser/app/settings.json:ro
+      - ./files/settings.json:/home/appuser/app/settings.json
       # Replace this file whenever Twitch login expires. Never commit real cookies.
       - ./files/cookies.jar:/home/appuser/app/cookies.jar
       - ./files/logs:/home/appuser/app/logs

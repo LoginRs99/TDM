@@ -39,7 +39,7 @@ To make future upstream merges as friction-free as possible:
 | `inventory.py` | • Replaced GUI notifications with `logger.info()`.<br>• Stubbed `_on_state_changed()` to `pass`.<br>• Synced zero-delta timer fix (`378697a`). | Headless mode has no Tkinter window/tray. | Ensure drop claim logging remains in `claim()` and delta bound checks in `_update_real_minutes()` / `update_minutes()` remain intact. |
 | `constants.py` | • `LOG_PATH = Path(WORKING_DIR, "logs", "log.txt")`<br>• `PING_TIMEOUT = 30s`<br>• `WATCH_INTERVAL = 20s`<br>• Added `PriorityMode.BALANCED`. | Supports Docker volume mounts (`/logs`), prevents false timeout disconnects on high-latency hosts, and matches upstream HEAD request timing. | Upstream GQL query hashes should be updated whenever upstream refreshes them. Retain the `LOG_PATH` subdirectory and `PING_TIMEOUT` adjustment. |
 | `websocket.py` | • Resilient exception handling on `ConnectionResetError` and `ClientConnectionError`.<br>• Auto-reconnect trigger on broken pipes. | Prevents unhandled websocket crashes in containerized network environments. | Keep error suppression and auto-reconnect triggers when merging upstream websocket changes. |
-| `utils.py` | • Removed `tkinter` and `webbrowser` desktop imports.<br>• Hardened `json_save()` with atomic `.new` rename and cleanup.<br>• Added `is_special = is_special_events` alias.<br>• Maintained cross-platform file locking (`linux`, `darwin`, `win32`). | Prevents headless environments from attempting to load X11/Tk displays. | Do not re-introduce `tkinter` or GUI-dependent imports into `utils.py`. |
+| `utils.py` | • Removed `tkinter` and `webbrowser` desktop imports.<br>• Hardened `json_save()` with atomic `.new` rename and Docker bind-mount `EBUSY` fallback.<br>• Added `is_special = is_special_events` alias.<br>• Maintained cross-platform file locking (`linux`, `darwin`, `win32`). | Prevents headless environments from attempting to load X11/Tk displays and allows settings persistence inside bind-mounted containers. | Do not re-introduce `tkinter` or GUI-dependent imports into `utils.py`. |
 | `settings.py` | • Added Docker environment variable overrides (`DISCORD_*`, `WEB_*`, `TWITCH_*`).<br>• Added `discord_notifications_enabled: bool`.<br>• Added 1-week interval parsing (`1w`, `7d`, up to 10080 minutes). | Allows configuration via `.env` and `docker-compose.yml` without editing JSON files directly. | Keep environment variable loaders and notification toggle fields intact. |
 | `main.py` | • Headless startup banner and configuration preflight validation.<br>• Added POSIX signal handling (`SIGINT`, `SIGTERM`) for clean Docker shutdowns.<br>• Spawns Web Dashboard and Discord Bot services in asyncio background tasks.<br>• Writes metrics on exit. | Replaces Tkinter main loop with server-grade daemon lifecycle. | Upstream changes to `main.py` are rare; when merging, preserve the async services initialization and signal handlers. |
 
@@ -55,10 +55,17 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 2. **`discord_bot.py`**:
    - Full-featured Discord slash command bot (`/status`, `/channels`, `/claim`, `/restart`, `/reload`, `/inventory`, `/drops`, `/help`, `/weekly`).
    - `/notifications` command group (`status`, `enable`, `disable`, `interval`, `test`, `weekly`).
+   - `/priority` command group with full ranking control:
+     - `/priority list`: Shows ranked games with live mining and active drops status.
+     - `/priority add <game> [rank]`: Add game or insert at a specific rank position.
+     - `/priority move <game> <new_rank>`: Reorder an existing game's priority rank.
+     - `/priority top <game>`: Promote any game directly to Rank #1 (highest priority).
+     - `/priority remove <game>` & `/priority clear`: Delete entries or clear list.
    - Defers interactions to prevent Discord 3-second timeouts on slow operations.
 3. **`web_dashboard.py`**:
    - Standalone `aiohttp` web server (default port `8080`).
    - Dynamic UI with channel switcher, manual claim, cookie refresher, and notification toggle button (`🔔 Discord Alerts: ON/OFF`).
+   - Displays priority ranking badges (`#1 Priority`, etc.) and sorts campaigns by user rank order.
    - Exposes `/api/health` and `/api/metrics`.
 4. **`cookie_refresher.py`**:
    - Automated Playwright session refresher & login solver.
@@ -71,7 +78,7 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 7. **`config_validator.py`**:
    - Startup preflight checks for required files, file permissions, and cookies validity.
 8. **`test_suite.py`**:
-   - 16 automated tests covering upstream sync parity, zero-delta fixes, Discord alerts, interval parsing, Web UI toggle, and healthcheck.
+   - 18 automated tests covering upstream sync parity, zero-delta fixes, Discord alerts, interval parsing, Web UI toggle, healthcheck, Docker bind-mount EBUSY fallback, and priority ranking logic.
 
 ---
 

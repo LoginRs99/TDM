@@ -332,13 +332,13 @@ class DiscordBotService:
                 description="Interactive Discord bot commands to monitor and control your headless drop miner.",
             )
             embed.add_field(name="📊 Status & Drops", value="`/status` - Live stream status, progress bar and action buttons\n`/games` - Overview of all campaigns and priority/excluded flags\n`/drops` - Detailed progress for active drop campaigns", inline=False)
-            embed.add_field(name="⭐ Priority Management", value="`/priority list` - Show current priority game order\n`/priority add <game>` - Add a game to priority list\n`/priority remove <game>` - Remove a game from priority list\n`/priority clear` - Clear entire priority list", inline=False)
+            embed.add_field(name="⭐ Priority Management", value="`/priority list` - Show current priority game order & live status\n`/priority add <game> [rank]` - Add game or set rank (1 = top)\n`/priority move <game> <new_rank>` - Change rank of an existing game\n`/priority top <game>` - Promote game to Rank #1 (highest priority)\n`/priority remove <game>` - Remove a game from priority list\n`/priority clear` - Clear entire priority list", inline=False)
             embed.add_field(name="🚫 Excluded Games", value="`/exclude list` - Show excluded games\n`/exclude add <game>` - Blacklist a game\n`/exclude remove <game>` - Unblacklist a game", inline=False)
             embed.add_field(name="⚙️ Configuration & 2FA", value="`/settings` - Interactive settings viewer & priority mode selector\n`/notifications` - Toggle/configure Discord webhook notifications\n`/weekly` - View and send 7-day weekly mining summary\n`/2fa <code>` - Submit 2FA code for headless Playwright login", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # --- /priority Group ---
-        priority_group = app_commands.Group(name="priority", description="Manage game priority list")
+        priority_group = app_commands.Group(name="priority", description="Manage game priority ranking list")
 
         async def game_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
             names = sorted({c.game.name for c in service.twitch.inventory})
@@ -350,43 +350,154 @@ class DiscordBotService:
         async def priority_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
             names = service.twitch.settings.priority
             return [
-                app_commands.Choice(name=name, value=name)
-                for name in names if current.lower() in name.lower()
+                app_commands.Choice(name=f"#{i} {name}", value=name)
+                for i, name in enumerate(names, 1) if current.lower() in name.lower()
             ][:25]
 
-        @priority_group.command(name="list", description="Show ordered priority games")
+        @priority_group.command(name="list", description="Show ordered priority games with rank and live status")
         async def priority_list(interaction: discord.Interaction):
             priority = service.twitch.settings.priority
+            mode_name = service.twitch.settings.priority_mode.name
             if not priority:
-                await interaction.response.send_message("ℹ️ No priority games configured (using auto selection).", ephemeral=True)
+                await interaction.response.send_message(
+                    f"ℹ️ No priority games configured.\n**Mode:** `{mode_name}` (using automatic campaign selection).",
+                    ephemeral=True
+                )
                 return
 
-            msg = "**⭐ Priority Games List:**\n"
-            for i, name in enumerate(priority, 1):
-                msg += f"**{i}.** {name}\n"
-            await interaction.response.send_message(msg, ephemeral=True)
+            watching_ch = service.twitch.watching_channel.get_with_default(None)
+            active_games = {c.game.name for c in service.twitch.inventory}
 
-        @priority_group.command(name="add", description="Add a game to the priority list")
+            lines = [f"**⭐ Priority Games List (Ranking Order):**", f"**Mode:** `{mode_name}` | **Total:** {len(priority)} games\n"]
+            for i, name in enumerate(priority, 1):
+                status_tags = []
+                if watching_ch and watching_ch.game and watching_ch.game.name == name:
+                    status_tags.append("⛏️ **Currently Mining**")
+                elif name in active_games:
+                    status_tags.append("🟢 Drops Active")
+                else:
+                    status_tags.append("⚪ Inactive")
+                
+                tag_str = f" — {', '.join(status_tags)}" if status_tags else ""
+                lines.append(f"**#{i}** {name}{tag_str}")
+
+            lines.append("\n💡 *Ranking matters: Higher rank (#1) is mined first. Use `/priority move` to change ranks, or `/priority top` for #1.*")
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+        @priority_group.command(name="add", description="Add a game to priority or set its rank position")
+        @app_commands.describe(
+            game="Game name to prioritize",
+            rank="Optional rank position (1 = top priority). Defaults to end of list."
+        )
         @app_commands.autocomplete(game=game_autocomplete)
-        async def priority_add(interaction: discord.Interaction, game: str):
+        async def priority_add(interaction: discord.Interaction, game: str, rank: int | None = None):
             if not service.is_authorized(interaction):
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
             game_clean = game.strip()
-            if game_clean in service.twitch.settings.priority:
-                await interaction.response.send_message(f"ℹ️ `{game_clean}` is already in the priority list.", ephemeral=True)
+            if not game_clean:
+                await interaction.response.send_message("⚠️ Please provide a valid game name.", ephemeral=True)
                 return
 
-            service.twitch.settings.priority.append(game_clean)
+            priority = service.twitch.settings.priority
+            if game_clean in priority:
+                if rank is not None and rank > 0:
+                    priority.remove(game_clean)
+                    target_idx = max(0, min(rank - 1, len(priority)))
+                    priority.insert(target_idx, game_clean)
+                    actual_rank = target_idx + 1
+                    msg = f"🔀 **{game_clean}** was already in the list. Moved to **Rank #{actual_rank}** of {len(priority)}."
+                else:
+                    idx = priority.index(game_clean) + 1
+                    await interaction.response.send_message(
+                        f"ℹ️ `{game_clean}` is already in the priority list at **Rank #{idx}**.\n"
+                        f"Use `/priority move game:{game_clean} new_rank:<num>` to change its ranking.",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                if rank is not None and rank > 0:
+                    target_idx = max(0, min(rank - 1, len(priority)))
+                    priority.insert(target_idx, game_clean)
+                    actual_rank = target_idx + 1
+                    msg = f"✅ Added **{game_clean}** at **Rank #{actual_rank}** of {len(priority)}!"
+                else:
+                    priority.append(game_clean)
+                    actual_rank = len(priority)
+                    msg = f"✅ Added **{game_clean}** to Priority list at **Rank #{actual_rank}** (end of list)."
+
+            service.twitch.settings.alter()
+            service.twitch.settings.save()
+            service.twitch.stop_watching()
+            service.twitch.change_state(State.GAMES_UPDATE)
+
+            await interaction.response.send_message(msg, ephemeral=True)
+
+        @priority_group.command(name="move", description="Change the rank / priority position of an existing game")
+        @app_commands.describe(
+            game="Game to re-rank",
+            new_rank="New rank position (1 = highest priority)"
+        )
+        @app_commands.autocomplete(game=priority_autocomplete)
+        async def priority_move(interaction: discord.Interaction, game: str, new_rank: int):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            game_clean = game.strip()
+            priority = service.twitch.settings.priority
+            if game_clean not in priority:
+                await interaction.response.send_message(f"⚠️ `{game_clean}` is not in the priority list.", ephemeral=True)
+                return
+
+            if new_rank < 1:
+                new_rank = 1
+
+            old_rank = priority.index(game_clean) + 1
+            priority.remove(game_clean)
+            target_idx = max(0, min(new_rank - 1, len(priority)))
+            priority.insert(target_idx, game_clean)
+            actual_rank = target_idx + 1
+
             service.twitch.settings.alter()
             service.twitch.settings.save()
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
             await interaction.response.send_message(
-                f"✅ Added **{game_clean}** to Priority list! (Position #{len(service.twitch.settings.priority)})",
-                ephemeral=True,
+                f"🔀 Moved **{game_clean}** from **Rank #{old_rank}** ➔ **Rank #{actual_rank}** of {len(priority)}!\n"
+                f"Miner priority updated.",
+                ephemeral=True
+            )
+
+        @priority_group.command(name="top", description="Promote a game directly to Rank #1 (highest priority)")
+        @app_commands.describe(game="Game name to promote to top priority")
+        @app_commands.autocomplete(game=game_autocomplete)
+        async def priority_top(interaction: discord.Interaction, game: str):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            game_clean = game.strip()
+            if not game_clean:
+                await interaction.response.send_message("⚠️ Please provide a valid game name.", ephemeral=True)
+                return
+
+            priority = service.twitch.settings.priority
+            if game_clean in priority:
+                priority.remove(game_clean)
+            priority.insert(0, game_clean)
+
+            service.twitch.settings.alter()
+            service.twitch.settings.save()
+            service.twitch.stop_watching()
+            service.twitch.change_state(State.GAMES_UPDATE)
+
+            await interaction.response.send_message(
+                f"👑 **{game_clean}** is now set as **Rank #1 (Highest Priority)**!\n"
+                f"Miner will prioritize this game above all others.",
+                ephemeral=True
             )
 
         @priority_group.command(name="remove", description="Remove a game from the priority list")
