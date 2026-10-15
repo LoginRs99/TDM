@@ -8,7 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import discord
 from discord import app_commands
@@ -334,7 +334,7 @@ class DiscordBotService:
             embed.add_field(name="📊 Status & Drops", value="`/status` - Live stream status, progress bar and action buttons\n`/games` - Overview of all campaigns and priority/excluded flags\n`/drops` - Detailed progress for active drop campaigns", inline=False)
             embed.add_field(name="⭐ Priority Management", value="`/priority list` - Show current priority game order\n`/priority add <game>` - Add a game to priority list\n`/priority remove <game>` - Remove a game from priority list\n`/priority clear` - Clear entire priority list", inline=False)
             embed.add_field(name="🚫 Excluded Games", value="`/exclude list` - Show excluded games\n`/exclude add <game>` - Blacklist a game\n`/exclude remove <game>` - Unblacklist a game", inline=False)
-            embed.add_field(name="⚙️ Configuration & 2FA", value="`/settings` - Interactive settings viewer & priority mode selector\n`/2fa <code>` - Submit 2FA code for headless Playwright login", inline=False)
+            embed.add_field(name="⚙️ Configuration & 2FA", value="`/settings` - Interactive settings viewer & priority mode selector\n`/notifications` - Toggle/configure Discord webhook notifications\n`/weekly` - View and send 7-day weekly mining summary\n`/2fa <code>` - Submit 2FA code for headless Playwright login", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # --- /priority Group ---
@@ -498,10 +498,154 @@ class DiscordBotService:
             embed.add_field(name="Excluded Games", value=str(len(settings.exclude)), inline=True)
             embed.add_field(name="Auto Cookie Refresh", value=f"`{getattr(settings, 'auto_cookie_refresh', False)}`", inline=True)
 
+            webhook_url = settings.discord_webhook_url.strip()
+            notify_enabled = getattr(settings, 'discord_notifications_enabled', True)
+            if webhook_url and notify_enabled:
+                notify_status = "🟢 Enabled"
+            elif webhook_url:
+                notify_status = "⏸️ Disabled (Toggle OFF)"
+            else:
+                notify_status = "⚪ Disabled (No URL)"
+
+            embed.add_field(name="Discord Webhook", value=notify_status, inline=True)
+            embed.add_field(name="Summary Interval", value=f"`{settings.discord_summary_interval_minutes}m`", inline=True)
+
             view = SettingsView(service)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-        # --- /2fa Command ---
+        # --- /notifications Group ---
+        notify_group = app_commands.Group(name="notifications", description="Manage Discord webhook notifications and weekly reports")
+
+        @notify_group.command(name="status", description="Show current webhook notifications status and settings")
+        async def notify_status_cmd(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            settings = service.twitch.settings
+            webhook_url = settings.discord_webhook_url.strip()
+            enabled = getattr(settings, "discord_notifications_enabled", True)
+            interval = settings.discord_summary_interval_minutes
+
+            embed = discord.Embed(
+                title="🔔 Discord Webhook Notifications",
+                color=0x9146FF if (webhook_url and enabled) else 0x95A5A6,
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(
+                name="Notifications Status",
+                value="🟢 **Enabled**" if (webhook_url and enabled) else ("⏸️ **Disabled (Toggle is OFF)**" if webhook_url else "⚪ **Disabled (No Webhook URL)**"),
+                inline=True
+            )
+            embed.add_field(name="Summary Interval", value=f"`{interval} minutes` (~{interval/60:.1f} hrs)", inline=True)
+            embed.add_field(name="1-Week Digest", value="`Active (Every 7 days)`", inline=True)
+            masked_url = (webhook_url[:35] + "..." + webhook_url[-10:]) if len(webhook_url) > 45 else (webhook_url if webhook_url else "*Not configured*")
+            embed.add_field(name="Webhook URL", value=f"`{masked_url}`", inline=False)
+            embed.set_footer(text="Use /notifications enable, /notifications disable, or /notifications weekly")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        @notify_group.command(name="enable", description="Enable Discord webhook notifications")
+        async def notify_enable_cmd(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            service.twitch.discord.enable()
+            await interaction.response.send_message("✅ **Discord webhook notifications have been ENABLED!**", ephemeral=True)
+
+        @notify_group.command(name="disable", description="Disable Discord webhook notifications without deleting webhook URL")
+        async def notify_disable_cmd(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            service.twitch.discord.disable()
+            await interaction.response.send_message("⏸️ **Discord webhook notifications have been DISABLED!** (No webhook messages will be sent until re-enabled)", ephemeral=True)
+
+        @notify_group.command(name="interval", description="Set drop summary interval in minutes (up to 10080 for 1 week)")
+        async def notify_interval_cmd(interaction: discord.Interaction, minutes: int):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            if minutes < 1 or minutes > 10080:
+                await interaction.response.send_message("❌ Interval must be between 1 and 10080 minutes (up to 1 week).", ephemeral=True)
+                return
+
+            service.twitch.settings.discord_summary_interval_minutes = minutes
+            service.twitch.settings.alter()
+            service.twitch.settings.save()
+            await interaction.response.send_message(f"✅ **Discord summary interval set to `{minutes}` minutes!** (~{minutes/60:.1f} hours)", ephemeral=True)
+
+        @notify_group.command(name="test", description="Send an immediate test notification to your configured Discord webhook")
+        async def notify_test_cmd(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            await interaction.response.defer(ephemeral=True)
+            success = await service.twitch.discord.send_test_notification()
+            if success:
+                await interaction.followup.send("✅ **Test notification sent successfully to your Discord webhook!**", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ **Failed to send test notification.** Please check your webhook URL in settings or logs.", ephemeral=True)
+
+        @notify_group.command(name="weekly", description="Send the 1-week weekly mining digest to your Discord webhook right now")
+        async def notify_weekly_cmd(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                return
+
+            await interaction.response.defer(ephemeral=True)
+            success = await service.twitch.discord.send_weekly_summary(force=True)
+            if success:
+                await interaction.followup.send("✅ **Weekly 7-day summary digest delivered to Discord webhook!**", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ **Failed to send weekly summary.** Please check your webhook URL in settings or logs.", ephemeral=True)
+
+        bot.tree.add_command(notify_group)
+
+        # --- /weekly Command (Top-Level Shortcut) ---
+        @bot.tree.command(name="weekly", description="View and send the 7-day weekly mining summary")
+        async def cmd_weekly(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=False)
+            try:
+                metrics = getattr(service.twitch, "metrics", None)
+                if metrics:
+                    stats = metrics.get_stats()
+                    drops_claimed = stats.get("drops_claimed", 0)
+                    drops_failed = stats.get("drops_failed", 0)
+                    drop_rate = stats.get("drop_success_rate", 0.0)
+                    watch_mins = stats.get("total_minutes_watched", 0)
+                    watch_hours = watch_mins / 60.0
+                    uptime_hours = stats.get("uptime_hours", 0.0)
+                    uptime_days = uptime_hours / 24.0
+                else:
+                    drops_claimed = 0
+                    drops_failed = 0
+                    drop_rate = 100.0
+                    watch_hours = 0.0
+                    uptime_days = 0.0
+
+                embed = discord.Embed(
+                    title="📅 Weekly Drops Mining Digest (7 Days)",
+                    color=0xF1C40F,
+                    description="Performance rollup for the past 7 days of headless drops farming.",
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="🎁 Claimed Drops", value=f"`{drops_claimed} drops` ({drop_rate:.1f}% success)", inline=True)
+                embed.add_field(name="⏱️ Watch Time", value=f"`{watch_hours:.1f} hours`", inline=True)
+                embed.add_field(name="🚀 Miner Uptime", value=f"`{uptime_days:.1f} days`", inline=True)
+
+                # Also trigger webhook if configured
+                if service.twitch.settings.discord_webhook_url.strip():
+                    await service.twitch.discord.send_weekly_summary(force=True)
+                    embed.set_footer(text="A copy was also dispatched to your Discord webhook.")
+
+                await interaction.followup.send(embed=embed)
+            except Exception as e:
+                logger.error(f"Error in /weekly command: {e}", exc_info=True)
+                await interaction.followup.send(f"⚠️ Error preparing weekly report: {e}", ephemeral=True)
         @bot.tree.command(name="2fa", description="Provide 2FA token for Playwright login")
         async def cmd_2fa(interaction: discord.Interaction, code: str):
             if not service.is_authorized(interaction):
