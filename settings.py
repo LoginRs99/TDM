@@ -24,6 +24,7 @@ class SettingsFile(TypedDict):
     maintenance_interval_minutes: int
     # Discord / Logging
     discord_webhook_url: str
+    discord_notifications_enabled: bool
     discord_summary_interval_minutes: int
     discord_bot_token: str
     discord_owner_id: str
@@ -49,6 +50,7 @@ default_settings: SettingsFile = {
     "maintenance_interval_minutes": 20,
     "stale_stream_timeout_minutes": 5,
     "discord_webhook_url": "",
+    "discord_notifications_enabled": True,
     "discord_summary_interval_minutes": 60,
     "discord_bot_token": "",
     "discord_owner_id": "",
@@ -80,6 +82,7 @@ class Settings:
     connection_quality: int
     priority_mode: PriorityMode
     discord_webhook_url: str
+    discord_notifications_enabled: bool
     discord_summary_interval_minutes: int
     stale_stream_timeout_minutes: int
     maintenance_interval_minutes: int
@@ -115,6 +118,12 @@ class Settings:
                     "Should start with: https://discord.com/api/webhooks/"
                 )
 
+        # Discord Notifications Toggle (Enable/Disable)
+        if notify_env := os.getenv('DISCORD_NOTIFICATIONS_ENABLED'):
+            val = notify_env.strip().lower()
+            self._settings['discord_notifications_enabled'] = val in ('1', 'true', 'yes', 'on', 'enable', 'enabled')
+            logger.info(f"Discord notifications enabled: {self._settings['discord_notifications_enabled']}")
+
         # Discord Interactive Bot Token & Owner ID
         if bot_token := os.getenv('DISCORD_BOT_TOKEN'):
             self._settings['discord_bot_token'] = bot_token.strip()
@@ -123,22 +132,29 @@ class Settings:
         if owner_id := os.getenv('DISCORD_OWNER_ID'):
             self._settings['discord_owner_id'] = owner_id.strip()
         
-        # Discord Summary Interval
+        # Discord Summary Interval (supports up to 10080 minutes / 1 week)
         if interval := os.getenv('DISCORD_SUMMARY_INTERVAL'):
+            interval_str = interval.strip().lower()
             try:
-                interval_int = int(interval)
-                if 1 <= interval_int <= 1440:  # 1 minute to 24 hours
+                if interval_str in ('1w', '7d', 'week', '1week'):
+                    interval_int = 10080
+                elif interval_str in ('1d', 'day', '24h'):
+                    interval_int = 1440
+                else:
+                    interval_int = int(interval_str)
+
+                if 1 <= interval_int <= 10080:  # 1 minute to 10080 minutes (1 week)
                     self._settings['discord_summary_interval_minutes'] = interval_int
                     logger.info(f"Discord summary interval set to {interval_int} minutes")
                 else:
                     logger.warning(
                         f"DISCORD_SUMMARY_INTERVAL out of range ({interval_int}). "
-                        f"Must be 1-1440 minutes. Using default: "
+                        f"Must be 1-10080 minutes (up to 1 week). Using default: "
                         f"{default_settings['discord_summary_interval_minutes']}"
                     )
             except ValueError:
                 logger.warning(
-                    f"DISCORD_SUMMARY_INTERVAL is not a valid integer: '{interval}'. "
+                    f"DISCORD_SUMMARY_INTERVAL is not a valid integer or duration: '{interval}'. "
                     f"Using default: {default_settings['discord_summary_interval_minutes']}"
                 )
         
@@ -287,13 +303,14 @@ class Settings:
     
     def get_summary(self) -> str:
         """Get a human-readable summary of current settings"""
+        discord_active = bool(self.discord_webhook_url and self.discord_notifications_enabled)
         lines = [
             "=== Current Settings ===",
             f"Priority Mode: {self.priority_mode.name}",
             f"Priority Games: {len(self.priority)} configured",
             f"Excluded Games: {len(self.exclude)} configured",
             f"Maintenance Interval: {self.maintenance_interval_minutes} minutes",
-            f"Discord Notifications: {'Enabled' if self.discord_webhook_url else 'Disabled'}",
+            f"Discord Notifications: {'Enabled' if discord_active else ('Disabled (Toggle OFF)' if self.discord_webhook_url else 'Disabled (No Webhook)')}",
         ]
         
         if self.discord_webhook_url:
