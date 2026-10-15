@@ -176,7 +176,43 @@ Embeds follow Discord's best-practice structured layout:
 
 ---
 
-## 6. Testing & Maintenance Checklist
+## 6. Docker Integration & Image Publishing Workflow
+
+### A. Automatic CI/CD Build & Push (`ghcr.io`)
+The GitHub Actions workflow [.github/workflows/docker-image.yml](file:///.github/workflows/docker-image.yml) automatically builds multi-stage images and publishes them to GitHub Container Registry (`ghcr.io`):
+- **Triggers**: Fires on pushes to `master`, `main`, and `custom/**`, semantic version tags (`v*`), or manual execution (`workflow_dispatch`).
+- **Tagging**: Automatically tags images with `:latest` on `master` and `custom/docker-headless-review`, plus branch-specific tags (e.g. `:custom-docker-headless-review`, `:sha-<hash>`).
+- **Permissions**: Requires repository Actions permissions set to **Read and write permissions** (Settings -> Actions -> General -> Workflow permissions).
+
+### B. Building & Running Locally (No Registry Push Needed)
+[docker-compose.yml](file:///docker-compose.yml) includes a direct `build` context:
+```bash
+# Build the container locally from source:
+docker compose build
+
+# Start the container locally (builds automatically if image is missing):
+docker compose up -d
+
+# Force rebuild local container after code edits:
+docker compose up --build -d
+```
+
+### C. Manual Build & Push to GHCR on Your Own
+To manually build and push the container image from your local terminal:
+```bash
+# 1. Log in to GitHub Container Registry using a GitHub Personal Access Token (PAT with write:packages scope):
+echo $GITHUB_PAT | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
+
+# 2. Build the Docker image locally:
+docker build -t ghcr.io/<YOUR_GITHUB_USERNAME>/tdm:latest .
+
+# 3. Push to GHCR:
+docker push ghcr.io/<YOUR_GITHUB_USERNAME>/tdm:latest
+```
+
+---
+
+## 7. Testing & Maintenance Checklist
 
 Before releasing or deploying changes, run this checklist:
 
@@ -188,3 +224,4 @@ Before releasing or deploying changes, run this checklist:
 - [ ] Verify `healthcheck.py` responds to both HTTP check and file timestamp check.
 - [ ] Ensure no desktop dependencies (`tkinter`, `PIL.ImageTk`, `webbrowser`) are imported by core modules.
 - [ ] Verify `.env.example` contains any newly added configuration parameters.
+- [ ] Verify Docker build passes: `docker compose build` or `docker build -t tdm:test .`

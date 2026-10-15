@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - "custom/**"
       - "codex/**"
     tags:
       - "v*"
@@ -15,6 +16,11 @@ on:
       - "requirements.txt"
       - "**/*.py"
   workflow_dispatch:
+    inputs:
+      tag_latest:
+        description: "Also tag image as :latest"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -51,7 +57,7 @@ jobs:
         with:
           images: ${{ steps.image.outputs.image }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/custom/docker-headless-review' || startsWith(github.ref, 'refs/heads/custom/') || inputs.tag_latest == true }}
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
