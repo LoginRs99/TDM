@@ -821,7 +821,8 @@ class Twitch:
 
             interval = self.get_adaptive_watch_interval()
             
-            # Send watch with fallback
+            # Send watch via playlist HEAD requests (upstream mining method)
+            last_sent = time()
             watch_success = await channel.send_watch()
             if metrics := getattr(self, "metrics", None):
                 metrics.record_watch_attempt(watch_success)
@@ -849,9 +850,8 @@ class Twitch:
                     await asyncio.sleep(2)
                     continue
               
-            last_sent = time()
-            
-            await asyncio.sleep(add_jitter(20, 0.2))
+            # Wait ~15 seconds for a progress update (offsetting elapsed watch duration)
+            await asyncio.sleep(max(1.0, 15.0 - min(time() - last_sent, 15.0)))
 
             # Check progress
             try:
