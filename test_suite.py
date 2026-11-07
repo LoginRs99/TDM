@@ -694,6 +694,59 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_dashboard_campaigns_endpoint(self):
+        """Verify GET /api/campaigns returns structured campaigns with drops breakdown"""
+        from web_dashboard import WebDashboard
+        import json
+
+        mock_drop = MagicMock()
+        mock_drop.id = "d1"
+        mock_drop.name = "AK Skin"
+        mock_drop.required_minutes = 120
+        mock_drop.current_minutes = 60
+        mock_drop.is_claimed = False
+        mock_drop.progress = 0.5
+
+        mock_camp = MagicMock()
+        mock_camp.id = "c1"
+        mock_camp.game.name = "Rust"
+        mock_camp.name = "Rust Drops"
+        mock_camp.status = "ACTIVE"
+        mock_camp.linked = True
+        mock_camp.starts_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        mock_camp.ends_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        mock_camp.claimed_drops = 0
+        mock_camp.total_drops = 1
+        mock_camp.progress = 0.5
+        mock_camp.timed_drops = {mock_drop.id: mock_drop}
+
+        mock_settings = MagicMock()
+        mock_settings.priority = ["Rust"]
+        mock_settings.exclude = set()
+        mock_settings.web_password = ""
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+        mock_twitch.inventory = [mock_camp]
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            req = MagicMock()
+            resp = loop.run_until_complete(dashboard.handle_campaigns(req))
+            data = json.loads(resp.text)
+            self.assertEqual(data["status"], "ok")
+            self.assertEqual(len(data["campaigns"]), 1)
+            camp_info = data["campaigns"][0]
+            self.assertEqual(camp_info["game"], "Rust")
+            self.assertTrue(camp_info["is_linked"])
+            self.assertTrue(camp_info["is_priority"])
+            self.assertFalse(camp_info["is_excluded"])
+            self.assertEqual(len(camp_info["drops"]), 1)
+            self.assertEqual(camp_info["drops"][0]["name"], "AK Skin")
+        finally:
+            loop.close()
+
 
 class TestNetworkResilienceAndLogging(unittest.TestCase):
     def test_twitch_network_healthy_property(self):

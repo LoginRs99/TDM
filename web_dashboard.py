@@ -580,6 +580,7 @@ class WebDashboard:
         self.app.router.add_post("/api/settings/priority", self.handle_priority_action)
         self.app.router.add_post("/api/settings/exclude", self.handle_exclude_action)
         self.app.router.add_post("/api/notifications/test", self.handle_test_notification)
+        self.app.router.add_get("/api/campaigns", self.handle_campaigns)
 
     async def handle_login_page(self, request: web.Request) -> web.Response:
         return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html")
@@ -1184,6 +1185,76 @@ class WebDashboard:
                 return web.json_response({"status": "error", "message": "Failed to send test notification. Check logs."}, status=500)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    async def handle_campaigns(self, request: web.Request) -> web.Response:
+        """Returns detailed inventory of all campaigns with drops and link statuses."""
+        campaigns_list = []
+        now = datetime.now(timezone.utc)
+        priority_list = list(getattr(self.twitch.settings, "priority", []))
+        priority_set = set(priority_list)
+        exclude_raw = getattr(self.twitch.settings, "exclude", set())
+        exclude_set = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
+
+        inventory = getattr(self.twitch, "inventory", [])
+        for camp in sorted(inventory, key=lambda c: (
+            0 if (getattr(c, "game", None) and getattr(c.game, "name", "") in priority_set) else 1,
+            priority_list.index(c.game.name) if (getattr(c, "game", None) and getattr(c.game, "name", "") in priority_set) else 0,
+            getattr(c, "ends_at", now),
+        )):
+            game_name = camp.game.name if getattr(camp, "game", None) else "Unknown"
+            is_prio = game_name in priority_set
+            is_excl = game_name in exclude_set
+            rank = (priority_list.index(game_name) + 1) if is_prio else None
+
+            time_left_str = "Ending"
+            if getattr(camp, "ends_at", None):
+                hours_left = (camp.ends_at - now).total_seconds() / 3600
+                if hours_left > 0:
+                    time_left_str = f"{hours_left:.1f}h left"
+
+            drops_list = []
+            timed_drops = getattr(camp, "timed_drops", {})
+            if isinstance(timed_drops, dict):
+                drops_iterable = timed_drops.values()
+            elif isinstance(timed_drops, (list, tuple, set)):
+                drops_iterable = timed_drops
+            else:
+                drops_iterable = []
+
+            for drop in drops_iterable:
+                progress_val = getattr(drop, "progress", 0.0) or 0.0
+                drops_list.append({
+                    "id": getattr(drop, "id", ""),
+                    "name": getattr(drop, "name", "Unnamed Drop"),
+                    "required_minutes": getattr(drop, "required_minutes", 0),
+                    "current_minutes": getattr(drop, "current_minutes", 0),
+                    "is_claimed": getattr(drop, "is_claimed", False),
+                    "progress_percent": int(progress_val * 100),
+                })
+
+            campaigns_list.append({
+                "id": getattr(camp, "id", ""),
+                "game": game_name,
+                "name": getattr(camp, "name", game_name),
+                "status": getattr(camp, "status", "ACTIVE"),
+                "is_linked": getattr(camp, "linked", False),
+                "starts_at": camp.starts_at.isoformat() if getattr(camp, "starts_at", None) else None,
+                "ends_at": camp.ends_at.isoformat() if getattr(camp, "ends_at", None) else None,
+                "time_left": time_left_str,
+                "is_priority": is_prio,
+                "priority_rank": rank,
+                "is_excluded": is_excl,
+                "claimed_drops": getattr(camp, "claimed_drops", 0),
+                "total_drops": getattr(camp, "total_drops", len(drops_list)),
+                "progress_percent": int((getattr(camp, "progress", 0.0) or 0.0) * 100),
+                "drops": drops_list,
+            })
+
+        return web.json_response({
+            "status": "ok",
+            "total": len(campaigns_list),
+            "campaigns": campaigns_list,
+        })
 
     async def start(self):
         """Starts the aiohttp web server."""
