@@ -123,20 +123,31 @@ These files do not exist upstream. They can be edited, extended, or refactored f
   - Global `tree.on_error` handler catches and reports interaction exceptions cleanly.
   - Game autocomplete for easy command input.
 
-#### 3. `web_dashboard.py` (Lightweight Web UI & REST API)
+#### 3. `web_dashboard.py` (Tabbed Full-Page Control Center & REST API)
 - Decoupled `aiohttp.web` service running on port `8080` (or `WEB_PORT`).
-- Dark-mode responsive Tailwind CSS UI:
-  - Header with RAM consumption badge, miner state badge, uptime counter, and logout button.
-  - Live channel card with channel switcher and active drop progress bar.
-  - Priority badge indicators (`#1 Priority`, etc.) and campaign ordering by user rank.
-  - 1-click Discord Notification Toggle button (`🔔 Discord Alerts: ON/OFF`).
-  - Interactive Action Panel: Channel Switch, Refresh Campaigns, Refresh Cookies.
-  - **Remote 2FA Challenge Solver**: Displays live 2FA screenshot from Playwright and provides an inline input field to submit verification codes remotely.
-- **Security**: Optional password protection via `WEB_PASSWORD`. Supports session cookies (`tdm_auth`) and HTTP Bearer tokens.
+- **Tabbed Full-Page Single Page Application (SPA)** with Twitch-themed dark mode:
+  - **Overview Tab**: Live channel card with streamer avatar and Twitch link, real-time drop progress bar with ETA and campaign drop counts, performance metrics grid (Drops claimed, watch time, success rate, priority mode), quick actions panel (Switch channel, refresh inventory, Playwright cookie refresh, Discord notification toggle), and 2FA interactive challenge solver.
+  - **Campaigns Tab**: Complete drop campaigns browser with search, filters (All, Linked, Unlinked, Priority, Excluded), reward details breakdown, and fast-action one-click `+ Prioritize` (promotes to #1 in queue) and `🚫 Exclude` buttons.
+  - **Settings Tab**: Comprehensive in-browser configuration management eliminating manual `settings.json` editing:
+    - *Mining Strategy*: Priority Mode (Balanced, Priority Only, Ending Soonest, Low Availability First), Connection Quality, Stale Stream Timeout, Maintenance Interval, Available Drops check, Badges/Emotes toggle.
+    - *Ranked Priority Queue*: Ranked drag/order controls (`▲`, `▼`, `⭐ Top`, `✕ Remove`), autocomplete input from live campaigns.
+    - *Excluded Games*: Tag cloud with one-click remove and autocomplete input.
+    - *Discord Notifications & Bot*: Webhook URL (masked), notifications toggle switch, summary interval presets (1h, 6h, 12h, 24h, 1 week), "Send Test Webhook" button, and bot token/owner ID status badges.
+    - *Account & Security*: Playwright auto cookie refresh toggle, Web UI password update, and safe "Log Out of Twitch" action.
+  - **Live Logs Tab**: In-browser real-time console streaming from an in-memory `WebLogHandler` circular buffer (`maxlen=500`), level filtering (`ALL`, `INFO`, `WARNING`, `ERROR`), auto-scroll toggle, "Copy All" and "Clear View" controls.
+- **Security**: Optional password protection via `WEB_PASSWORD`. Supports session cookies (`tdm_auth`) and HTTP Bearer tokens. All endpoints enforce defensive security headers (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`).
 - **REST Endpoints**:
   - `GET /`, `GET /login`, `POST /login`, `GET /logout`
   - `GET /api/health`: Container health check endpoint.
-  - `GET /api/status`: Real-time JSON status of miner, channels, drops, and metrics.
+  - `GET /api/status`: Real-time JSON status of miner, channels, drops, metrics, and network connectivity.
+  - `GET /api/campaigns`: Detailed active drop campaigns inventory with individual drops breakdown.
+  - `GET /api/settings`: Sanitized settings dictionary with masked webhook and option catalogs.
+  - `POST /api/settings`: Atomic validation, disk persistence, and dynamic runtime propagation for configuration updates.
+  - `POST /api/settings/priority`: Fine-grained priority ranking actions (`add`, `remove`, `move_up`, `move_down`, `top`).
+  - `POST /api/settings/exclude`: Add or remove games from the exclusion list.
+  - `POST /api/notifications/test`: Trigger test Discord webhook dispatch.
+  - `GET /api/logs`: In-memory log stream with level filtering (`?level=WARNING`) and limit parameters.
+  - `POST /api/logs/clear`: Clear in-memory log buffer.
   - `GET /api/2fa/status`: Whether a 2FA challenge is currently pending.
   - `GET /api/2fa/screenshot`: PNG image of the Twitch 2FA challenge screen.
   - `POST /api/action/submit-2fa`: Submit 2FA token to Playwright.
@@ -386,7 +397,7 @@ Before committing, merging, or deploying changes, run through this checklist:
   ```bash
   python test_suite.py
   ```
-  Verify that all **23/23 tests pass** (`OK`).
+  Verify that all **28/28 tests pass** (`OK`).
 - [ ] **Run Module Import Audit**:
   ```bash
   python -c "import channel, constants, inventory, utils, settings, twitch, main, web_dashboard, discord_notifier, discord_bot, cookie_refresher, metrics, healthcheck, healthcheck_writer, config_validator"
