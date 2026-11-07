@@ -243,12 +243,19 @@ class Twitch:
         self._session_created: float = 0
         self._game_live_counts: dict[str, int] = {}
         self._last_settings_validation_signature: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]] | None = None
+        self._last_network_error_time: float = 0
+        self._last_network_success_time: float = time()
         # Initialize Blacklist
         self._channel_blacklist: dict[int, int] = {}
         try:
             self._cookies_mtime: float = COOKIES_PATH.stat().st_mtime if COOKIES_PATH.exists() else 0
         except Exception:
             self._cookies_mtime = 0
+
+    @property
+    def is_network_healthy(self) -> bool:
+        """Returns True if no network/connection errors occurred in the last 60s and GQL is healthy."""
+        return (time() - getattr(self, "_last_network_error_time", 0)) > 60 and self._consecutive_gql_failures == 0
 
     def check_cookies_updated(self) -> bool:
         """Check if cookies.jar was replaced on disk and reload session if so."""
@@ -505,7 +512,7 @@ class Twitch:
         for name in invalid_names:
             suggestions = get_close_matches(name, available_names, n=3, cutoff=0.72)
             if suggestions:
-                logger.warning(
+                logger.info(
                     "Configured %s game %r is not active now. Did you mean: %s?",
                     setting_name,
                     name,
@@ -809,15 +816,20 @@ class Twitch:
                 self.change_state(State.CHANNEL_SWITCH)
                 continue
 
-            # Check for stale stream
+            # Check for stale stream - only countdown if network is healthy
+            network_healthy = self.is_network_healthy
             if self._last_progress_timestamp > 0:
                 timeout = getattr(self.settings, 'stale_stream_timeout_minutes', 5) * 60
-                if time() - self._last_progress_timestamp > timeout:
-                    logger.warning(f"No drop progress on '{channel.name}' for {timeout/60} mins. Forcing switch.")
-                    self._last_progress_timestamp = 0
-                    self.change_state(State.CHANNEL_SWITCH)
-                    await asyncio.sleep(5)
-                    continue
+                if network_healthy:
+                    if time() - self._last_progress_timestamp > timeout:
+                        logger.warning(f"No drop progress on '{channel.name}' for {timeout/60} mins. Forcing switch.")
+                        self._last_progress_timestamp = 0
+                        self.change_state(State.CHANNEL_SWITCH)
+                        await asyncio.sleep(5)
+                        continue
+                else:
+                    # During network outage, shift last_progress_timestamp forward so outage duration doesn't count against streamer
+                    self._last_progress_timestamp = time() - (timeout * 0.5)
 
             interval = self.get_adaptive_watch_interval()
             
@@ -836,19 +848,22 @@ class Twitch:
             else:
                 logger.warning(f"Watch failed on {channel.name}")
                 
-                # Blacklist logic
-                self._channel_blacklist[channel.id] = self._channel_blacklist.get(channel.id, 0) + 1
-                fail_count = self._channel_blacklist[channel.id]
-                
-                if fail_count >= 5:
-                    logger.error(
-                        f"Blacklisting {channel.name} after {fail_count} failures. "
-                        f"Switching to different channel..."
-                    )
-                    self._last_progress_timestamp = 0
-                    self.change_state(State.CHANNEL_SWITCH)
-                    await asyncio.sleep(2)
-                    continue
+                # Only blacklist if the network is healthy. If the local network has errors, do not penalize the channel.
+                if network_healthy:
+                    self._channel_blacklist[channel.id] = self._channel_blacklist.get(channel.id, 0) + 1
+                    fail_count = self._channel_blacklist[channel.id]
+                    
+                    if fail_count >= 5:
+                        logger.error(
+                            f"Blacklisting {channel.name} after {fail_count} failures. "
+                            f"Switching to different channel..."
+                        )
+                        self._last_progress_timestamp = 0
+                        self.change_state(State.CHANNEL_SWITCH)
+                        await asyncio.sleep(2)
+                        continue
+                else:
+                    logger.debug(f"Network error active; skipping blacklist penalty for {channel.name}")
               
             # Wait ~15 seconds for a progress update (offsetting elapsed watch duration)
             await asyncio.sleep(max(1.0, 15.0 - min(time() - last_sent, 15.0)))
@@ -1076,6 +1091,7 @@ class Twitch:
             try:
                 response = await session.request(method, url, **kwargs)
                 if response.status < 500:
+                    self._last_network_success_time = time()
                     try:
                         yield response
                         return
@@ -1103,6 +1119,7 @@ class Twitch:
                 logger.error(f"Unexpected error in request: {e}")
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                self._last_network_error_time = time()
                 logger.warning(
                     "Connection error (%s) while requesting %s. Retrying in %.1fs.",
                     type(e).__name__,
@@ -1188,6 +1205,7 @@ class Twitch:
                 
                 if not retry:
                     self._consecutive_gql_failures = 0
+                    self._last_network_success_time = time()
                     return json_resp
                     
                 if retry:
@@ -1282,6 +1300,7 @@ class Twitch:
             
         except (GQLException, RequestException) as e:
             self._consecutive_gql_failures += 1
+            self._last_network_error_time = time()
             logger.error(f"Failed to fetch inventory (attempt {self._consecutive_gql_failures}): {e}")
             self.update_healthcheck(error=True)
             if self._consecutive_gql_failures >= 5:

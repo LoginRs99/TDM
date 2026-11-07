@@ -65,6 +65,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
         <div class="flex items-center space-x-3">
+            <span id="net-badge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 hidden sm:inline">
+                Twitch API: OK
+            </span>
             <span id="mem-badge" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-800 text-purple-300 border border-gray-700 hidden sm:inline">
                 RAM: --
             </span>
@@ -260,6 +263,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const memBadge = document.getElementById('mem-badge');
                 memBadge.innerText = `RAM: ${data.system.memory_mb} MB`;
                 memBadge.classList.remove('hidden');
+            }
+            if (data.network) {
+                const netBadge = document.getElementById('net-badge');
+                if (netBadge) {
+                    if (data.network.healthy) {
+                        netBadge.innerText = 'Twitch API: OK';
+                        netBadge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 hidden sm:inline';
+                    } else {
+                        const fails = data.network.consecutive_failures || 1;
+                        netBadge.innerText = `Twitch API: Retrying (${fails})`;
+                        netBadge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-950/60 text-amber-400 border border-amber-800/60 hidden sm:inline';
+                    }
+                }
             }
             if (data.has_password) {
                 document.getElementById('logout-link').classList.remove('hidden');
@@ -640,6 +656,10 @@ class WebDashboard:
             "metrics": metrics_stats,
             "system": {
                 "memory_mb": memory_mb,
+            },
+            "network": {
+                "healthy": getattr(self.twitch, "is_network_healthy", True),
+                "consecutive_failures": getattr(self.twitch, "_consecutive_gql_failures", 0),
             },
             "discord": {
                 "enabled": getattr(self.twitch.settings, "discord_notifications_enabled", True),

@@ -66,6 +66,12 @@ class TestUpstreamSync(unittest.TestCase):
         # Check that fallback _send_watch_spade exists
         self.assertTrue(hasattr(Channel, "_send_watch_spade"))
 
+    def test_user_agent_update(self):
+        """Verify Chrome 156 and Android app 31.8.0 user agents from upstream 69a4ff9"""
+        from constants import ClientType
+        self.assertIn("Chrome/156.0.0.0", str(ClientType.WEB.USER_AGENT))
+        self.assertIn("tv.twitch.android.app/31.8.0/3108006", str(ClientType.ANDROID_APP.USER_AGENT))
+
 
 class TestDiscordNotifications(unittest.TestCase):
     def setUp(self):
@@ -335,6 +341,25 @@ class TestDiscordBotCommands(unittest.TestCase):
         self.assertIn("remove", prio_sub_names)
         self.assertIn("clear", prio_sub_names)
 
+    def test_bot_resilience_and_views(self):
+        """Verify Discord bot has persistent view, error handler, and sync guard"""
+        from discord_bot import DiscordBotService, StatusView
+        
+        mock_settings = MagicMock()
+        mock_settings.discord_bot_token = "fake_token"
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+
+        service = DiscordBotService(mock_twitch)
+        self.assertFalse(service._synced)
+        self.assertFalse(service._stopping)
+        self.assertTrue(hasattr(service, "_bot_runner"))
+        self.assertIsNotNone(service.bot.tree.on_error)
+        
+        # Verify persistent StatusView is registered in bot views
+        has_status_view = any(isinstance(v, StatusView) for v in service.bot.persistent_views)
+        self.assertTrue(has_status_view)
+
 
 class DummyArgs:
     pass
@@ -430,6 +455,78 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
             ok, msg = check_http_health()
             self.assertTrue(ok)
             self.assertIn("9090", msg)
+
+    def test_dashboard_status_network_field(self):
+        """Verify Web Dashboard handle_status includes network health information"""
+        from web_dashboard import WebDashboard
+        import json
+
+        mock_settings = MagicMock()
+        mock_settings.priority_mode.name = "BALANCED"
+        mock_settings.priority = []
+        mock_settings.exclude = set()
+        mock_settings.discord_notifications_enabled = True
+        mock_settings.discord_webhook_url = ""
+        mock_settings.discord_summary_interval_minutes = 60
+        mock_settings.web_password = ""
+
+        mock_twitch = MagicMock()
+        mock_twitch._state.name = "IDLE"
+        mock_twitch.settings = mock_settings
+        mock_twitch.watching_channel.get_with_default.return_value = None
+        mock_twitch.get_active_campaign.return_value = None
+        mock_twitch.inventory = []
+        mock_twitch.metrics.get_stats.return_value = {}
+        mock_twitch.is_network_healthy = True
+        mock_twitch._consecutive_gql_failures = 0
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            req = MagicMock()
+            resp = loop.run_until_complete(dashboard.handle_status(req))
+            data = json.loads(resp.text)
+            self.assertIn("network", data)
+            self.assertTrue(data["network"]["healthy"])
+            self.assertEqual(data["network"]["consecutive_failures"], 0)
+        finally:
+            loop.close()
+
+
+class TestNetworkResilienceAndLogging(unittest.TestCase):
+    def test_twitch_network_healthy_property(self):
+        """Verify is_network_healthy reflects recent errors and consecutive GQL failures"""
+        from twitch import Twitch
+        from time import time
+
+        twitch_obj = Twitch.__new__(Twitch)
+        twitch_obj._last_network_error_time = 0
+        twitch_obj._consecutive_gql_failures = 0
+
+        self.assertTrue(twitch_obj.is_network_healthy)
+
+        # Failure 1: recent error
+        twitch_obj._last_network_error_time = time()
+        self.assertFalse(twitch_obj.is_network_healthy)
+
+        # Failure 2: consecutive GQL failures
+        twitch_obj._last_network_error_time = 0
+        twitch_obj._consecutive_gql_failures = 2
+        self.assertFalse(twitch_obj.is_network_healthy)
+
+    def test_invalid_game_names_logged_as_info(self):
+        """Verify _log_invalid_game_names logs suggestions at INFO level, not WARNING"""
+        from twitch import Twitch
+        import logging
+
+        with self.assertLogs("TwitchDrops", level=logging.INFO) as log:
+            Twitch._log_invalid_game_names(
+                "exclude",
+                ["EA Sports College Football 26"],
+                ["EA Sports College Football 27"]
+            )
+            self.assertTrue(any("INFO" in record for record in log.output))
+            self.assertFalse(any("WARNING" in record for record in log.output))
 
 
 class TestJsonSaveAndPriorityRanking(unittest.TestCase):

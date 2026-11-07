@@ -150,6 +150,8 @@ class DiscordBotService:
         self._task: asyncio.Task | None = None
         self._2fa_task: asyncio.Task | None = None
         self._2fa_alert_sent: bool = False
+        self._synced: bool = False
+        self._stopping: bool = False
         self._setup_events_and_commands()
 
     def is_authorized(self, interaction: discord.Interaction) -> bool:
@@ -165,14 +167,35 @@ class DiscordBotService:
         bot = self.bot
         service = self
 
+        # Register persistent view so button interactions always work across sessions
+        bot.add_view(StatusView(service))
+
+        # Global command error handler
+        @bot.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            logger.error(
+                f"Discord slash command error on /{interaction.command.name if interaction.command else 'unknown'}: {error}",
+                exc_info=True,
+            )
+            msg = f"⚠️ An error occurred while executing this command: {error}"
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(msg, ephemeral=True)
+            except Exception as e:
+                logger.debug(f"Failed to dispatch error response to interaction: {e}")
+
         @bot.event
         async def on_ready():
             logger.info(f"Discord Bot logged in as {bot.user} (ID: {bot.user.id})")
-            try:
-                synced = await bot.tree.sync()
-                logger.info(f"Synced {len(synced)} Discord slash commands")
-            except Exception as e:
-                logger.error(f"Failed to sync slash commands: {e}")
+            if not service._synced:
+                try:
+                    synced = await bot.tree.sync()
+                    service._synced = True
+                    logger.info(f"Synced {len(synced)} Discord slash commands")
+                except Exception as e:
+                    logger.error(f"Failed to sync slash commands: {e}")
 
             if service._2fa_task is None or service._2fa_task.done():
                 service._2fa_task = asyncio.create_task(service._monitor_2fa_loop())
@@ -194,6 +217,8 @@ class DiscordBotService:
                 )
                 embed.add_field(name="Status", value=f"`{state_name}`", inline=True)
                 embed.add_field(name="Mode", value=f"`{mode_name}`", inline=True)
+                net_ok = getattr(service.twitch, "is_network_healthy", True)
+                embed.add_field(name="Network", value="🟢 Connected" if net_ok else "⚠️ Degraded (Retrying...)", inline=True)
 
                 if metrics := getattr(service.twitch, "metrics", None):
                     stats = metrics.get_stats()
@@ -356,10 +381,11 @@ class DiscordBotService:
 
         @priority_group.command(name="list", description="Show ordered priority games with rank and live status")
         async def priority_list(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
             priority = service.twitch.settings.priority
             mode_name = service.twitch.settings.priority_mode.name
             if not priority:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"ℹ️ No priority games configured.\n**Mode:** `{mode_name}` (using automatic campaign selection).",
                     ephemeral=True
                 )
@@ -382,7 +408,7 @@ class DiscordBotService:
                 lines.append(f"**#{i}** {name}{tag_str}")
 
             lines.append("\n💡 *Ranking matters: Higher rank (#1) is mined first. Use `/priority move` to change ranks, or `/priority top` for #1.*")
-            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+            await interaction.followup.send("\n".join(lines), ephemeral=True)
 
         @priority_group.command(name="add", description="Add a game to priority or set its rank position")
         @app_commands.describe(
@@ -395,9 +421,10 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             if not game_clean:
-                await interaction.response.send_message("⚠️ Please provide a valid game name.", ephemeral=True)
+                await interaction.followup.send("⚠️ Please provide a valid game name.", ephemeral=True)
                 return
 
             priority = service.twitch.settings.priority
@@ -410,7 +437,7 @@ class DiscordBotService:
                     msg = f"🔀 **{game_clean}** was already in the list. Moved to **Rank #{actual_rank}** of {len(priority)}."
                 else:
                     idx = priority.index(game_clean) + 1
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         f"ℹ️ `{game_clean}` is already in the priority list at **Rank #{idx}**.\n"
                         f"Use `/priority move game:{game_clean} new_rank:<num>` to change its ranking.",
                         ephemeral=True
@@ -432,7 +459,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
 
         @priority_group.command(name="move", description="Change the rank / priority position of an existing game")
         @app_commands.describe(
@@ -445,10 +472,11 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             priority = service.twitch.settings.priority
             if game_clean not in priority:
-                await interaction.response.send_message(f"⚠️ `{game_clean}` is not in the priority list.", ephemeral=True)
+                await interaction.followup.send(f"⚠️ `{game_clean}` is not in the priority list.", ephemeral=True)
                 return
 
             if new_rank < 1:
@@ -465,7 +493,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"🔀 Moved **{game_clean}** from **Rank #{old_rank}** ➔ **Rank #{actual_rank}** of {len(priority)}!\n"
                 f"Miner priority updated.",
                 ephemeral=True
@@ -479,9 +507,10 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             if not game_clean:
-                await interaction.response.send_message("⚠️ Please provide a valid game name.", ephemeral=True)
+                await interaction.followup.send("⚠️ Please provide a valid game name.", ephemeral=True)
                 return
 
             priority = service.twitch.settings.priority
@@ -494,7 +523,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"👑 **{game_clean}** is now set as **Rank #1 (Highest Priority)**!\n"
                 f"Miner will prioritize this game above all others.",
                 ephemeral=True
@@ -507,9 +536,10 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             if game_clean not in service.twitch.settings.priority:
-                await interaction.response.send_message(f"⚠️ `{game_clean}` is not in the priority list.", ephemeral=True)
+                await interaction.followup.send(f"⚠️ `{game_clean}` is not in the priority list.", ephemeral=True)
                 return
 
             service.twitch.settings.priority.remove(game_clean)
@@ -518,7 +548,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(f"🗑️ Removed **{game_clean}** from Priority list.", ephemeral=True)
+            await interaction.followup.send(f"🗑️ Removed **{game_clean}** from Priority list.", ephemeral=True)
 
         @priority_group.command(name="clear", description="Clear all priority games")
         async def priority_clear(interaction: discord.Interaction):
@@ -526,13 +556,14 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             service.twitch.settings.priority.clear()
             service.twitch.settings.alter()
             service.twitch.settings.save()
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message("🧹 Priority list cleared! Returning to automatic selection.", ephemeral=True)
+            await interaction.followup.send("🧹 Priority list cleared! Returning to automatic selection.", ephemeral=True)
 
         bot.tree.add_command(priority_group)
 
@@ -548,13 +579,14 @@ class DiscordBotService:
 
         @exclude_group.command(name="list", description="Show excluded games")
         async def exclude_list(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
             exclude = service.twitch.settings.exclude
             if not exclude:
-                await interaction.response.send_message("ℹ️ No excluded games configured.", ephemeral=True)
+                await interaction.followup.send("ℹ️ No excluded games configured.", ephemeral=True)
                 return
 
             msg = "**🚫 Excluded Games:**\n" + "\n".join(f"• {g}" for g in sorted(exclude))
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
 
         @exclude_group.command(name="add", description="Exclude a game from being watched")
         @app_commands.autocomplete(game=game_autocomplete)
@@ -563,6 +595,7 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             service.twitch.settings.exclude.add(game_clean)
             service.twitch.settings.alter()
@@ -570,7 +603,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(f"🚫 Added **{game_clean}** to Excluded list.", ephemeral=True)
+            await interaction.followup.send(f"🚫 Added **{game_clean}** to Excluded list.", ephemeral=True)
 
         @exclude_group.command(name="remove", description="Remove a game from excluded list")
         @app_commands.autocomplete(game=exclude_autocomplete)
@@ -579,6 +612,7 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             game_clean = game.strip()
             service.twitch.settings.exclude.discard(game_clean)
             service.twitch.settings.alter()
@@ -586,7 +620,7 @@ class DiscordBotService:
             service.twitch.stop_watching()
             service.twitch.change_state(State.GAMES_UPDATE)
 
-            await interaction.response.send_message(f"✅ Removed **{game_clean}** from Excluded list.", ephemeral=True)
+            await interaction.followup.send(f"✅ Removed **{game_clean}** from Excluded list.", ephemeral=True)
 
         bot.tree.add_command(exclude_group)
 
@@ -633,6 +667,7 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             settings = service.twitch.settings
             webhook_url = settings.discord_webhook_url.strip()
             enabled = getattr(settings, "discord_notifications_enabled", True)
@@ -653,7 +688,7 @@ class DiscordBotService:
             masked_url = (webhook_url[:35] + "..." + webhook_url[-10:]) if len(webhook_url) > 45 else (webhook_url if webhook_url else "*Not configured*")
             embed.add_field(name="Webhook URL", value=f"`{masked_url}`", inline=False)
             embed.set_footer(text="Use /notifications enable, /notifications disable, or /notifications weekly")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         @notify_group.command(name="enable", description="Enable Discord webhook notifications")
         async def notify_enable_cmd(interaction: discord.Interaction):
@@ -661,8 +696,9 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             service.twitch.discord.enable()
-            await interaction.response.send_message("✅ **Discord webhook notifications have been ENABLED!**", ephemeral=True)
+            await interaction.followup.send("✅ **Discord webhook notifications have been ENABLED!**", ephemeral=True)
 
         @notify_group.command(name="disable", description="Disable Discord webhook notifications without deleting webhook URL")
         async def notify_disable_cmd(interaction: discord.Interaction):
@@ -670,8 +706,9 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             service.twitch.discord.disable()
-            await interaction.response.send_message("⏸️ **Discord webhook notifications have been DISABLED!** (No webhook messages will be sent until re-enabled)", ephemeral=True)
+            await interaction.followup.send("⏸️ **Discord webhook notifications have been DISABLED!** (No webhook messages will be sent until re-enabled)", ephemeral=True)
 
         @notify_group.command(name="interval", description="Set drop summary interval in minutes (up to 10080 for 1 week)")
         async def notify_interval_cmd(interaction: discord.Interaction, minutes: int):
@@ -679,14 +716,15 @@ class DiscordBotService:
                 await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
                 return
 
+            await interaction.response.defer(ephemeral=True)
             if minutes < 1 or minutes > 10080:
-                await interaction.response.send_message("❌ Interval must be between 1 and 10080 minutes (up to 1 week).", ephemeral=True)
+                await interaction.followup.send("❌ Interval must be between 1 and 10080 minutes (up to 1 week).", ephemeral=True)
                 return
 
             service.twitch.settings.discord_summary_interval_minutes = minutes
             service.twitch.settings.alter()
             service.twitch.settings.save()
-            await interaction.response.send_message(f"✅ **Discord summary interval set to `{minutes}` minutes!** (~{minutes/60:.1f} hours)", ephemeral=True)
+            await interaction.followup.send(f"✅ **Discord summary interval set to `{minutes}` minutes!** (~{minutes/60:.1f} hours)", ephemeral=True)
 
         @notify_group.command(name="test", description="Send an immediate test notification to your configured Discord webhook")
         async def notify_test_cmd(interaction: discord.Interaction):
@@ -803,15 +841,55 @@ class DiscordBotService:
                 logger.debug(f"2FA monitor loop exception: {e}")
             await asyncio.sleep(3)
 
+    async def _bot_runner(self):
+        """Supervisor loop that keeps the Discord bot alive across network drops and restarts."""
+        retry_delay = 5.0
+        max_delay = 300.0
+        while not self._stopping:
+            try:
+                if self.bot.is_closed():
+                    intents = discord.Intents.default()
+                    self.bot = commands.Bot(command_prefix="!", intents=intents)
+                    self._setup_events_and_commands()
+
+                logger.info("Connecting Discord Bot to gateway...")
+                await self.bot.start(self.token)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if self._stopping:
+                    break
+                logger.warning(
+                    f"Discord Bot disconnected with error ({type(e).__name__}: {e}). "
+                    f"Auto-reconnecting in {retry_delay:.1f}s..."
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, max_delay)
+            else:
+                if not self._stopping:
+                    logger.warning(f"Discord Bot connection closed unexpectedly. Reconnecting in {retry_delay:.1f}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 1.5, max_delay)
+                else:
+                    break
+            finally:
+                if not self.bot.is_closed():
+                    try:
+                        await self.bot.close()
+                    except Exception:
+                        pass
+
     async def start(self):
         if not self.token:
             logger.info("Discord Bot Token not configured. Interactive Bot disabled.")
             return
 
-        logger.info("Starting interactive Discord Bot...")
-        self._task = asyncio.create_task(self.bot.start(self.token))
+        logger.info("Starting interactive Discord Bot supervisor...")
+        self._stopping = False
+        self._task = asyncio.create_task(self._bot_runner())
 
     async def stop(self):
+        self._stopping = True
         if self._2fa_task and not self._2fa_task.done():
             self._2fa_task.cancel()
         if self.bot and not self.bot.is_closed():
