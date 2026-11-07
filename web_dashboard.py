@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from constants import State
+from constants import State, PriorityMode
 from cookie_refresher import SCREENSHOT_2FA_PATH, TOKEN_2FA_PATH
 
 try:
@@ -575,6 +575,11 @@ class WebDashboard:
         self.app.router.add_post("/api/action/toggle-notifications", self.handle_toggle_notifications)
         self.app.router.add_get("/api/logs", self.handle_logs)
         self.app.router.add_post("/api/logs/clear", self.handle_logs_clear)
+        self.app.router.add_get("/api/settings", self.handle_get_settings)
+        self.app.router.add_post("/api/settings", self.handle_update_settings)
+        self.app.router.add_post("/api/settings/priority", self.handle_priority_action)
+        self.app.router.add_post("/api/settings/exclude", self.handle_exclude_action)
+        self.app.router.add_post("/api/notifications/test", self.handle_test_notification)
 
     async def handle_login_page(self, request: web.Request) -> web.Response:
         return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html")
@@ -817,6 +822,368 @@ class WebDashboard:
         if hasattr(self, "log_handler") and self.log_handler:
             self.log_handler.clear()
         return web.json_response({"status": "ok", "message": "Logs cleared"})
+
+    @staticmethod
+    def _mask_webhook_url(url: str) -> str:
+        if not url:
+            return ""
+        m = re.match(r"^(https://discord\.com/api/webhooks/\d+/)(.+)$", url.strip())
+        if m:
+            prefix = m.group(1)
+            token = m.group(2)
+            if len(token) > 6:
+                return f"{prefix}{token[:3]}*****{token[-3:]}"
+            return f"{prefix}*****"
+        return "https://discord.com/api/webhooks/*****"
+
+    async def handle_get_settings(self, request: web.Request) -> web.Response:
+        """Returns all configured settings with masked secrets and options catalog."""
+        s = self.twitch.settings
+        webhook = getattr(s, "discord_webhook_url", "")
+        masked_webhook = self._mask_webhook_url(webhook) if webhook else ""
+
+        # Extract known games from active campaigns in inventory
+        known_games: set[str] = set()
+        if hasattr(self.twitch, "inventory") and self.twitch.inventory:
+            for c in self.twitch.inventory:
+                if getattr(c, "game", None) and getattr(c.game, "name", None):
+                    known_games.add(c.game.name)
+
+        priority_list = list(getattr(s, "priority", []))
+        exclude_raw = getattr(s, "exclude", set())
+        exclude_list = sorted(list(exclude_raw)) if isinstance(exclude_raw, (set, list)) else []
+        known_games.update(priority_list)
+        known_games.update(exclude_list)
+
+        priority_mode = s.priority_mode
+        mode_name = priority_mode.name if hasattr(priority_mode, "name") else str(priority_mode)
+
+        settings_dict = {
+            "priority_mode": mode_name,
+            "connection_quality": getattr(s, "connection_quality", 1),
+            "stale_stream_timeout_minutes": getattr(s, "stale_stream_timeout_minutes", 5),
+            "maintenance_interval_minutes": getattr(s, "maintenance_interval_minutes", 20),
+            "discord_webhook_url": masked_webhook,
+            "has_discord_webhook": bool(webhook),
+            "discord_notifications_enabled": getattr(s, "discord_notifications_enabled", True),
+            "discord_summary_interval_minutes": getattr(s, "discord_summary_interval_minutes", 60),
+            "logging_level": getattr(s, "logging_level", "INFO"),
+            "enable_badges_emotes": getattr(s, "enable_badges_emotes", False),
+            "available_drops_check": getattr(s, "available_drops_check", False),
+            "auto_cookie_refresh": getattr(s, "auto_cookie_refresh", False),
+            "priority": priority_list,
+            "exclude": exclude_list,
+            "web_port": getattr(s, "web_port", 8080),
+            "has_web_password": bool(self.password),
+            "has_discord_bot_token": bool(getattr(s, "discord_bot_token", "")),
+            "discord_owner_id": getattr(s, "discord_owner_id", ""),
+        }
+
+        options = {
+            "priority_modes": [
+                {"id": 3, "name": "BALANCED", "label": "Balanced (Recommended: Priority list first, then scarce/urgent campaigns)"},
+                {"id": 0, "name": "PRIORITY_ONLY", "label": "Priority Only (Only farm games explicitly listed in your priority queue)"},
+                {"id": 1, "name": "ENDING_SOONEST", "label": "Ending Soonest (Focus on campaigns ending soonest)"},
+                {"id": 2, "name": "LOW_AVBL_FIRST", "label": "Low Availability First (Farm scarce campaigns first)"},
+            ],
+            "connection_qualities": [
+                {"id": 1, "label": "1 - Low (Fastest channel checks, lowest resource usage)"},
+                {"id": 2, "label": "2 - Medium (Standard validation)"},
+                {"id": 3, "label": "3 - High (Conservative verification)"},
+            ],
+            "logging_levels": ["DEBUG", "INFO", "WARNING", "ERROR"],
+            "summary_intervals": [
+                {"minutes": 60, "label": "1 Hour"},
+                {"minutes": 360, "label": "6 Hours"},
+                {"minutes": 720, "label": "12 Hours"},
+                {"minutes": 1440, "label": "24 Hours (Daily)"},
+                {"minutes": 10080, "label": "10080 Minutes (Weekly)"},
+            ],
+            "known_games": sorted(list(known_games)),
+        }
+
+        return web.json_response({
+            "status": "ok",
+            "settings": settings_dict,
+            "options": options,
+        })
+
+    async def handle_update_settings(self, request: web.Request) -> web.Response:
+        """Validates and applies settings updates from the Web UI."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        s = self.twitch.settings
+        altered = False
+        recheck_channels = False
+
+        # 1. Priority Mode
+        if "priority_mode" in data:
+            raw_mode = data["priority_mode"]
+            mode_obj = None
+            if isinstance(raw_mode, int):
+                try:
+                    mode_obj = PriorityMode(raw_mode)
+                except ValueError:
+                    return web.json_response({"error": f"Invalid priority_mode ID: {raw_mode}"}, status=400)
+            elif isinstance(raw_mode, str):
+                try:
+                    mode_obj = PriorityMode[raw_mode.strip().upper()]
+                except KeyError:
+                    return web.json_response({"error": f"Invalid priority_mode name: {raw_mode}"}, status=400)
+            if mode_obj is not None and getattr(s, "priority_mode", None) != mode_obj:
+                s.priority_mode = mode_obj
+                altered = True
+                recheck_channels = True
+
+        # 2. Connection Quality
+        if "connection_quality" in data:
+            try:
+                cq = int(data["connection_quality"])
+                if cq not in (1, 2, 3):
+                    raise ValueError()
+                if getattr(s, "connection_quality", 1) != cq:
+                    s.connection_quality = cq
+                    altered = True
+            except (ValueError, TypeError):
+                return web.json_response({"error": "connection_quality must be 1, 2, or 3"}, status=400)
+
+        # 3. Stale Stream Timeout
+        if "stale_stream_timeout_minutes" in data:
+            try:
+                sst = int(data["stale_stream_timeout_minutes"])
+                if sst < 1 or sst > 120:
+                    raise ValueError()
+                if getattr(s, "stale_stream_timeout_minutes", 5) != sst:
+                    s.stale_stream_timeout_minutes = sst
+                    altered = True
+            except (ValueError, TypeError):
+                return web.json_response({"error": "stale_stream_timeout_minutes must be between 1 and 120"}, status=400)
+
+        # 4. Maintenance Interval
+        if "maintenance_interval_minutes" in data:
+            try:
+                mi = int(data["maintenance_interval_minutes"])
+                if mi < 5 or mi > 1440:
+                    raise ValueError()
+                if getattr(s, "maintenance_interval_minutes", 20) != mi:
+                    s.maintenance_interval_minutes = mi
+                    altered = True
+            except (ValueError, TypeError):
+                return web.json_response({"error": "maintenance_interval_minutes must be between 5 and 1440"}, status=400)
+
+        # 5. Discord Webhook URL
+        if "discord_webhook_url" in data:
+            raw_url = str(data["discord_webhook_url"]).strip()
+            if "*****" not in raw_url and raw_url.lower() != "keep":
+                if raw_url and not raw_url.startswith("https://discord.com/api/webhooks/"):
+                    return web.json_response({"error": "discord_webhook_url must start with https://discord.com/api/webhooks/"}, status=400)
+                if getattr(s, "discord_webhook_url", "") != raw_url:
+                    s.discord_webhook_url = raw_url
+                    if hasattr(self.twitch, "discord") and self.twitch.discord:
+                        self.twitch.discord.webhook_url = raw_url
+                    altered = True
+
+        # 6. Discord Notifications Enabled
+        if "discord_notifications_enabled" in data:
+            enabled = bool(data["discord_notifications_enabled"])
+            if getattr(s, "discord_notifications_enabled", True) != enabled:
+                s.discord_notifications_enabled = enabled
+                if hasattr(self.twitch, "discord") and self.twitch.discord:
+                    self.twitch.discord.set_enabled(enabled)
+                altered = True
+
+        # 7. Discord Summary Interval
+        if "discord_summary_interval_minutes" in data:
+            try:
+                dsi = int(data["discord_summary_interval_minutes"])
+                if dsi < 1 or dsi > 10080:
+                    raise ValueError()
+                if getattr(s, "discord_summary_interval_minutes", 60) != dsi:
+                    s.discord_summary_interval_minutes = dsi
+                    if hasattr(self.twitch, "discord") and self.twitch.discord:
+                        self.twitch.discord.summary_interval_minutes = dsi
+                    altered = True
+            except (ValueError, TypeError):
+                return web.json_response({"error": "discord_summary_interval_minutes must be between 1 and 10080"}, status=400)
+
+        # 8. Logging Level
+        if "logging_level" in data:
+            ll = str(data["logging_level"]).strip().upper()
+            if ll not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+                return web.json_response({"error": "logging_level must be DEBUG, INFO, WARNING, or ERROR"}, status=400)
+            if getattr(s, "logging_level", "INFO") != ll:
+                s.logging_level = ll
+                logging.getLogger("TwitchDrops").setLevel(getattr(logging, ll, logging.INFO))
+                altered = True
+
+        # 9. Boolean toggles
+        for bool_field in ("enable_badges_emotes", "available_drops_check", "auto_cookie_refresh"):
+            if bool_field in data:
+                val = bool(data[bool_field])
+                if getattr(s, bool_field, False) != val:
+                    setattr(s, bool_field, val)
+                    altered = True
+
+        # 10. Priority List
+        if "priority" in data:
+            p = [str(g).strip() for g in data["priority"] if str(g).strip()]
+            seen = set()
+            clean_p = [x for x in p if not (x in seen or seen.add(x))]
+            if getattr(s, "priority", []) != clean_p:
+                s.priority = clean_p
+                altered = True
+                recheck_channels = True
+
+        # 11. Exclude Set
+        if "exclude" in data:
+            e = {str(g).strip() for g in data["exclude"] if str(g).strip()}
+            if getattr(s, "exclude", set()) != e:
+                s.exclude = e
+                altered = True
+                recheck_channels = True
+
+        # 12. Web Password Update
+        if "web_password" in data:
+            new_pwd = str(data["web_password"]).strip()
+            if new_pwd and new_pwd != "*****" and new_pwd != self.password:
+                s.web_password = new_pwd
+                self.password = new_pwd
+                altered = True
+
+        if altered:
+            if hasattr(s, "alter"):
+                s.alter()
+            s.save(force=True)
+            logger.info("Web Dashboard: Settings updated and saved to disk")
+
+        if recheck_channels and hasattr(self.twitch, "stop_watching"):
+            self.twitch.stop_watching()
+            self.twitch.change_state(State.CHANNEL_SWITCH)
+
+        return web.json_response({"status": "ok", "message": "Settings updated successfully!"})
+
+    async def handle_priority_action(self, request: web.Request) -> web.Response:
+        """Handles fine-grained priority ranking actions."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        action = str(data.get("action", "")).strip().lower()
+        game = str(data.get("game", "")).strip()
+        if not game:
+            return web.json_response({"error": "Game name required"}, status=400)
+
+        s = self.twitch.settings
+        priority = list(getattr(s, "priority", []))
+        exclude_raw = getattr(s, "exclude", set())
+        exclude = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
+
+        if action == "add":
+            rank = data.get("rank")
+            if game in priority:
+                priority.remove(game)
+            if rank is not None:
+                try:
+                    rank_idx = max(0, min(int(rank) - 1, len(priority)))
+                    priority.insert(rank_idx, game)
+                except (ValueError, TypeError):
+                    priority.append(game)
+            else:
+                priority.append(game)
+            exclude.discard(game)
+        elif action == "remove":
+            if game in priority:
+                priority.remove(game)
+        elif action == "move_up":
+            if game in priority:
+                idx = priority.index(game)
+                if idx > 0:
+                    priority[idx], priority[idx - 1] = priority[idx - 1], priority[idx]
+        elif action == "move_down":
+            if game in priority:
+                idx = priority.index(game)
+                if idx < len(priority) - 1:
+                    priority[idx], priority[idx + 1] = priority[idx + 1], priority[idx]
+        elif action == "top":
+            if game in priority:
+                priority.remove(game)
+            priority.insert(0, game)
+            exclude.discard(game)
+        else:
+            return web.json_response({"error": f"Unknown action: {action}"}, status=400)
+
+        s.priority = priority
+        s.exclude = exclude
+        if hasattr(s, "alter"):
+            s.alter()
+        s.save(force=True)
+
+        if hasattr(self.twitch, "stop_watching"):
+            self.twitch.stop_watching()
+            self.twitch.change_state(State.CHANNEL_SWITCH)
+
+        return web.json_response({"status": "ok", "priority": s.priority})
+
+    async def handle_exclude_action(self, request: web.Request) -> web.Response:
+        """Handles add and remove operations for excluded games."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        action = str(data.get("action", "")).strip().lower()
+        game = str(data.get("game", "")).strip()
+        if not game:
+            return web.json_response({"error": "Game name required"}, status=400)
+
+        s = self.twitch.settings
+        exclude_raw = getattr(s, "exclude", set())
+        exclude = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
+        priority = list(getattr(s, "priority", []))
+
+        if action == "add":
+            exclude.add(game)
+            if game in priority:
+                priority.remove(game)
+        elif action == "remove":
+            exclude.discard(game)
+        else:
+            return web.json_response({"error": f"Unknown action: {action}"}, status=400)
+
+        s.exclude = exclude
+        s.priority = priority
+        if hasattr(s, "alter"):
+            s.alter()
+        s.save(force=True)
+
+        if hasattr(self.twitch, "stop_watching"):
+            self.twitch.stop_watching()
+            self.twitch.change_state(State.CHANNEL_SWITCH)
+
+        return web.json_response({"status": "ok", "exclude": sorted(list(s.exclude))})
+
+    async def handle_test_notification(self, request: web.Request) -> web.Response:
+        """Sends a test Discord notification webhook."""
+        webhook = getattr(self.twitch.settings, "discord_webhook_url", "")
+        if not webhook:
+            return web.json_response({"error": "No Discord webhook URL configured."}, status=400)
+
+        discord = getattr(self.twitch, "discord", None)
+        if not discord:
+            return web.json_response({"error": "Discord notifier not initialized."}, status=500)
+
+        try:
+            success = await discord.send_test_notification()
+            if success:
+                return web.json_response({"status": "ok", "message": "Test notification sent successfully!"})
+            else:
+                return web.json_response({"status": "error", "message": "Failed to send test notification. Check logs."}, status=500)
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def start(self):
         """Starts the aiohttp web server."""

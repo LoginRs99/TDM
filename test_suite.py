@@ -541,6 +541,159 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
             loop.close()
             logger.removeHandler(handler)
 
+    def test_dashboard_get_and_post_settings(self):
+        """Verify GET /api/settings and POST /api/settings validation and updates"""
+        from web_dashboard import WebDashboard
+        import json
+
+        mock_settings = MagicMock()
+        mock_settings.priority_mode = PriorityMode.BALANCED
+        mock_settings.priority = ["Rust"]
+        mock_settings.exclude = {"Fortnite"}
+        mock_settings.connection_quality = 1
+        mock_settings.stale_stream_timeout_minutes = 5
+        mock_settings.maintenance_interval_minutes = 20
+        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/123/token_secret"
+        mock_settings.discord_notifications_enabled = True
+        mock_settings.discord_summary_interval_minutes = 60
+        mock_settings.logging_level = "INFO"
+        mock_settings.enable_badges_emotes = False
+        mock_settings.available_drops_check = False
+        mock_settings.auto_cookie_refresh = True
+        mock_settings.web_port = 8080
+        mock_settings.web_password = ""
+        mock_settings.discord_bot_token = ""
+        mock_settings.discord_owner_id = ""
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+        mock_twitch.inventory = []
+        mock_twitch.discord = MagicMock()
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            # 1. GET /api/settings
+            req_get = MagicMock()
+            resp_get = loop.run_until_complete(dashboard.handle_get_settings(req_get))
+            data_get = json.loads(resp_get.text)
+            self.assertEqual(data_get["settings"]["priority_mode"], "BALANCED")
+            self.assertIn("123", data_get["settings"]["discord_webhook_url"])
+            self.assertNotIn("token_secret", data_get["settings"]["discord_webhook_url"])  # Masked!
+            self.assertEqual(data_get["settings"]["priority"], ["Rust"])
+            self.assertEqual(data_get["settings"]["exclude"], ["Fortnite"])
+            self.assertIn("priority_modes", data_get["options"])
+
+            # 2. POST /api/settings with valid updates
+            req_post = MagicMock()
+            req_post.json = AsyncMock(return_value={
+                "priority_mode": 1,  # ENDING_SOONEST
+                "connection_quality": 2,
+                "stale_stream_timeout_minutes": 8,
+                "maintenance_interval_minutes": 25,
+                "discord_summary_interval_minutes": 120,
+                "logging_level": "DEBUG",
+                "enable_badges_emotes": True,
+            })
+            resp_post = loop.run_until_complete(dashboard.handle_update_settings(req_post))
+            data_post = json.loads(resp_post.text)
+            self.assertEqual(data_post["status"], "ok")
+            mock_settings.save.assert_called()
+            self.assertEqual(mock_settings.priority_mode, PriorityMode.ENDING_SOONEST)
+            self.assertEqual(mock_settings.connection_quality, 2)
+            self.assertEqual(mock_settings.stale_stream_timeout_minutes, 8)
+            self.assertEqual(mock_settings.maintenance_interval_minutes, 25)
+            self.assertEqual(mock_settings.discord_summary_interval_minutes, 120)
+            self.assertEqual(mock_settings.logging_level, "DEBUG")
+            self.assertTrue(mock_settings.enable_badges_emotes)
+
+            # 3. POST /api/settings with invalid values (rejected)
+            req_invalid = MagicMock()
+            req_invalid.json = AsyncMock(return_value={
+                "stale_stream_timeout_minutes": -5,
+            })
+            resp_invalid = loop.run_until_complete(dashboard.handle_update_settings(req_invalid))
+            self.assertEqual(resp_invalid.status, 400)
+        finally:
+            loop.close()
+
+    def test_dashboard_priority_and_exclude_actions(self):
+        """Verify POST /api/settings/priority and POST /api/settings/exclude"""
+        from web_dashboard import WebDashboard
+        import json
+
+        mock_settings = MagicMock()
+        mock_settings.priority = ["Rust", "Apex Legends", "Valorant"]
+        mock_settings.exclude = set(["Roblox"])
+        mock_settings.web_password = ""
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            # Priority Add
+            req_p_add = MagicMock()
+            req_p_add.json = AsyncMock(return_value={"action": "add", "game": "Warframe"})
+            resp = loop.run_until_complete(dashboard.handle_priority_action(req_p_add))
+            data = json.loads(resp.text)
+            self.assertEqual(data["status"], "ok")
+            self.assertIn("Warframe", mock_settings.priority)
+
+            # Priority Move Up
+            req_p_up = MagicMock()
+            req_p_up.json = AsyncMock(return_value={"action": "move_up", "game": "Apex Legends"})
+            resp_up = loop.run_until_complete(dashboard.handle_priority_action(req_p_up))
+            self.assertEqual(json.loads(resp_up.text)["priority"][0], "Apex Legends")
+
+            # Priority Top
+            req_p_top = MagicMock()
+            req_p_top.json = AsyncMock(return_value={"action": "top", "game": "Valorant"})
+            resp_top = loop.run_until_complete(dashboard.handle_priority_action(req_p_top))
+            self.assertEqual(json.loads(resp_top.text)["priority"][0], "Valorant")
+
+            # Exclude Add
+            req_e_add = MagicMock()
+            req_e_add.json = AsyncMock(return_value={"action": "add", "game": "FIFA 23"})
+            resp_e_add = loop.run_until_complete(dashboard.handle_exclude_action(req_e_add))
+            self.assertIn("FIFA 23", mock_settings.exclude)
+
+            # Exclude Remove
+            req_e_rem = MagicMock()
+            req_e_rem.json = AsyncMock(return_value={"action": "remove", "game": "Roblox"})
+            resp_e_rem = loop.run_until_complete(dashboard.handle_exclude_action(req_e_rem))
+            self.assertNotIn("Roblox", mock_settings.exclude)
+        finally:
+            loop.close()
+
+    def test_dashboard_test_notification(self):
+        """Verify POST /api/notifications/test triggers discord test notification"""
+        from web_dashboard import WebDashboard
+        import json
+
+        mock_settings = MagicMock()
+        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/1/abc"
+        mock_settings.web_password = ""
+
+        mock_discord = MagicMock()
+        mock_discord.send_test_notification = AsyncMock(return_value=True)
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+        mock_twitch.discord = mock_discord
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            req = MagicMock()
+            resp = loop.run_until_complete(dashboard.handle_test_notification(req))
+            data = json.loads(resp.text)
+            self.assertEqual(data["status"], "ok")
+            mock_discord.send_test_notification.assert_awaited_once()
+        finally:
+            loop.close()
+
 
 class TestNetworkResilienceAndLogging(unittest.TestCase):
     def test_twitch_network_healthy_property(self):
