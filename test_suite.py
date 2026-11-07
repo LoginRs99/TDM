@@ -492,6 +492,55 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_web_log_handler_and_api_logs(self):
+        """Verify WebLogHandler captures logs and handle_logs returns filtered entries"""
+        import logging
+        from web_dashboard import WebDashboard, WebLogHandler
+        import json
+
+        handler = WebLogHandler(capacity=10)
+        logger = logging.getLogger("TestWebLog")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        logger.info("Test info message")
+        logger.warning("Test warning message")
+        logger.error("Test error message")
+
+        self.assertEqual(len(handler.buffer), 3)
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings.web_password = ""
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        dashboard.log_handler = handler
+
+        loop = asyncio.new_event_loop()
+        try:
+            # All logs
+            req_all = MagicMock()
+            req_all.query = {}
+            resp = loop.run_until_complete(dashboard.handle_logs(req_all))
+            data = json.loads(resp.text)
+            self.assertEqual(len(data["logs"]), 3)
+
+            # Filter level WARNING (should include WARNING and ERROR)
+            req_warn = MagicMock()
+            req_warn.query = {"level": "WARNING"}
+            resp_warn = loop.run_until_complete(dashboard.handle_logs(req_warn))
+            data_warn = json.loads(resp_warn.text)
+            self.assertEqual(len(data_warn["logs"]), 2)
+            self.assertTrue(all(l["level"] in ("WARNING", "ERROR") for l in data_warn["logs"]))
+
+            # Clear logs
+            req_clear = MagicMock()
+            resp_clear = loop.run_until_complete(dashboard.handle_logs_clear(req_clear))
+            data_clear = json.loads(resp_clear.text)
+            self.assertEqual(data_clear["status"], "ok")
+            self.assertEqual(len(handler.buffer), 0)
+        finally:
+            loop.close()
+            logger.removeHandler(handler)
+
 
 class TestNetworkResilienceAndLogging(unittest.TestCase):
     def test_twitch_network_healthy_property(self):

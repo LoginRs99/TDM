@@ -5,6 +5,7 @@ Built with aiohttp.web, completely decoupled from twitch.py internal logic.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import re
 from datetime import datetime, timezone
@@ -467,6 +468,29 @@ LOGIN_HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+class WebLogHandler(logging.Handler):
+    """In-memory circular log buffer for the Web Dashboard."""
+
+    def __init__(self, capacity: int = 500):
+        super().__init__()
+        self.buffer: deque[dict[str, Any]] = deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = record.getMessage()
+            self.buffer.append({
+                "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                "time_short": datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),
+                "level": record.levelname,
+                "message": msg,
+            })
+        except Exception:
+            self.handleError(record)
+
+    def clear(self):
+        self.buffer.clear()
+
+
 class WebDashboard:
     """Provides Web UI and REST API for Twitch Drops Miner."""
 
@@ -476,7 +500,11 @@ class WebDashboard:
         self.port = port
         self.password: str = getattr(twitch.settings, "web_password", "").strip()
         self._last_action_time: float = 0.0
-        
+
+        # In-memory logging ring buffer
+        self.log_handler: WebLogHandler = WebLogHandler(capacity=500)
+        logging.getLogger("TwitchDrops").addHandler(self.log_handler)
+
         # Initialize aiohttp app with security middleware
         middlewares = [self._security_middleware]
         self.app = web.Application(middlewares=middlewares)
@@ -545,6 +573,8 @@ class WebDashboard:
         self.app.router.add_post("/api/action/refresh", self.handle_refresh)
         self.app.router.add_post("/api/action/refresh-cookies", self.handle_refresh_cookies)
         self.app.router.add_post("/api/action/toggle-notifications", self.handle_toggle_notifications)
+        self.app.router.add_get("/api/logs", self.handle_logs)
+        self.app.router.add_post("/api/logs/clear", self.handle_logs_clear)
 
     async def handle_login_page(self, request: web.Request) -> web.Response:
         return web.Response(text=LOGIN_HTML_TEMPLATE, content_type="text/html")
@@ -750,6 +780,44 @@ class WebDashboard:
             "message": f"Discord notifications {status_str.lower()}!"
         })
 
+    async def handle_logs(self, request: web.Request) -> web.Response:
+        """Returns buffered application logs with level filtering and limits."""
+        if not hasattr(self, "log_handler") or not self.log_handler:
+            return web.json_response({"logs": [], "total": 0, "filter": "ALL"})
+
+        level_filter = request.query.get("level", "").strip().upper()
+        limit_str = request.query.get("limit", "200").strip()
+        try:
+            limit = min(500, max(1, int(limit_str)))
+        except ValueError:
+            limit = 200
+
+        LEVEL_HIERARCHY = {
+            "DEBUG": ["DEBUG", "INFO", "WARNING", "ERROR"],
+            "INFO": ["INFO", "WARNING", "ERROR"],
+            "WARNING": ["WARNING", "ERROR"],
+            "ERROR": ["ERROR"],
+        }
+
+        allowed_levels = LEVEL_HIERARCHY.get(level_filter)
+        all_logs = list(self.log_handler.buffer)
+        if allowed_levels:
+            filtered = [entry for entry in all_logs if entry.get("level") in allowed_levels]
+        else:
+            filtered = all_logs
+
+        return web.json_response({
+            "logs": filtered[-limit:],
+            "total": len(all_logs),
+            "filter": level_filter or "ALL",
+        })
+
+    async def handle_logs_clear(self, request: web.Request) -> web.Response:
+        """Clears the in-memory logs buffer."""
+        if hasattr(self, "log_handler") and self.log_handler:
+            self.log_handler.clear()
+        return web.json_response({"status": "ok", "message": "Logs cleared"})
+
     async def start(self):
         """Starts the aiohttp web server."""
         self.runner = web.AppRunner(self.app)
@@ -760,6 +828,8 @@ class WebDashboard:
 
     async def stop(self):
         """Stops the aiohttp web server gracefully."""
+        if hasattr(self, "log_handler") and self.log_handler:
+            logging.getLogger("TwitchDrops").removeHandler(self.log_handler)
         if self.runner:
             await self.runner.cleanup()
             logger.info("Web Dashboard stopped")
