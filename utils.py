@@ -438,3 +438,64 @@ class Game:
         return self.id in self.SPECIAL_GAME_IDS
 
     is_special = is_special_events
+
+
+def get_game_root(name: str) -> str:
+    """
+    Extracts the base franchise name from a game title by stripping:
+    - Subtitles after :, -, –, —
+    - Parentheses like (PC), (Console), (Global)
+    - Trailing annual years / editions like 24, 25, 26, 27, 2024, 2025, 2026, 2027
+    - Common edition suffixes like Console, Blitz, Mobile
+    """
+    if not name:
+        return ""
+    # Strip subtitles after :, -, –, —
+    base = re.split(r'[:\-\–\—]', name, maxsplit=1)[0].strip()
+    # Strip parentheses like (PC)
+    base = re.sub(r'\(.*?\)', '', base).strip()
+    # Strip trailing platform keywords like Console, Blitz, Mobile, Remastered
+    base = re.sub(r'\b(Console|Blitz|Mobile|Online|Remastered|Definitive Edition)\b', '', base, flags=re.IGNORECASE).strip()
+    # Strip trailing 2-digit or 4-digit years (e.g., 24, 25, 26, 27, 2024, 2025, 2026)
+    base = re.sub(r'\s+(?:20\d\d|\d{2})$', '', base).strip()
+    # Strip 2K years like 2K26, 2K27 -> 2K
+    base = re.sub(r'\b2K\d{2}\b', '2K', base, flags=re.IGNORECASE).strip()
+    return base.lower()
+
+
+def is_game_excluded(game_name: str | Game | None, exclude_list: abc.Iterable[str]) -> bool:
+    """
+    Checks if a game is excluded by matching exact name (case-insensitive),
+    subtitle/edition prefix, or franchise root (e.g. World of Tanks Console vs World of Tanks: HEAT).
+    """
+    if not game_name or not exclude_list:
+        return False
+    gn_str = game_name.name if hasattr(game_name, "name") else str(game_name)
+    gn_clean = gn_str.strip().casefold()
+    if not gn_clean:
+        return False
+    gn_root = get_game_root(gn_str)
+
+    for ex in exclude_list:
+        ex_clean = str(ex).strip().casefold()
+        if not ex_clean:
+            continue
+        # 1. Exact match (case-insensitive)
+        if gn_clean == ex_clean:
+            return True
+        # 2. Subtitle / prefix match (e.g. ex="World of Tanks", gn="World of Tanks: HEAT")
+        if gn_clean.startswith(ex_clean):
+            remainder = gn_clean[len(ex_clean):]
+            if remainder:
+                if remainder[0] in (":", "-", "–", "—", "(", "["):
+                    return True
+                # For space separator, require at least 2 words or 6 chars to prevent short word false positives (e.g. "The", "War")
+                if remainder[0] == " " and (len(ex_clean.split()) >= 2 or len(ex_clean) >= 6):
+                    return True
+        # 3. Root franchise match (e.g. ex="World of Tanks Console", gn="World of Tanks: HEAT")
+        ex_root = get_game_root(str(ex))
+        if ex_root and len(ex_root) >= 3 and ex_root == gn_root:
+            return True
+
+    return False
+

@@ -15,6 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from constants import PriorityMode, State, WORKING_DIR
+from utils import is_game_excluded
 
 if TYPE_CHECKING:
     from twitch import Twitch
@@ -173,6 +174,13 @@ class DiscordBotService:
         # Global command error handler
         @bot.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            orig_error = getattr(error, "original", error)
+            if isinstance(orig_error, discord.NotFound) and getattr(orig_error, "code", 0) == 10062:
+                logger.warning(
+                    f"Discord slash command /{interaction.command.name if interaction.command else 'unknown'} interaction expired (10062: Unknown interaction)."
+                )
+                return
+
             logger.error(
                 f"Discord slash command error on /{interaction.command.name if interaction.command else 'unknown'}: {error}",
                 exc_info=True,
@@ -203,7 +211,13 @@ class DiscordBotService:
         # --- /status Command ---
         @bot.tree.command(name="status", description="Show live mining status, current channel and progress")
         async def cmd_status(interaction: discord.Interaction):
-            await interaction.response.defer()
+            deferred = False
+            try:
+                await interaction.response.defer()
+                deferred = True
+            except discord.NotFound:
+                logger.warning("Discord interaction for /status expired before deferral (network latency > 3s).")
+
             try:
                 wc = service.twitch.watching_channel.get_with_default(None)
                 state_name = service.twitch._state.name if hasattr(service.twitch, "_state") else "UNKNOWN"
@@ -253,19 +267,28 @@ class DiscordBotService:
                     embed.add_field(name="📺 Channel", value="*Idle / Searching for streams...*", inline=False)
 
                 view = StatusView(service)
-                await interaction.followup.send(embed=embed, view=view)
+                if deferred:
+                    await interaction.followup.send(embed=embed, view=view)
+                elif interaction.channel:
+                    await interaction.channel.send(embed=embed, view=view)
             except Exception as e:
                 logger.error(f"Error in /status command: {e}", exc_info=True)
-                await interaction.followup.send(f"⚠️ Error retrieving status: {e}", ephemeral=True)
+                if deferred:
+                    await interaction.followup.send(f"⚠️ Error retrieving status: {e}", ephemeral=True)
 
         # --- /games Command ---
         @bot.tree.command(name="games", description="List active Twitch drop campaigns, priority and excluded status")
         async def cmd_games(interaction: discord.Interaction):
-            await interaction.response.defer()
+            deferred = False
+            try:
+                await interaction.response.defer()
+                deferred = True
+            except discord.NotFound:
+                logger.warning("Discord interaction for /games expired before deferral (network latency > 3s).")
+
             try:
                 now = datetime.now(timezone.utc)
                 priority_set = set(service.twitch.settings.priority)
-                exclude_set = service.twitch.settings.exclude
 
                 embed = discord.Embed(
                     title="🎮 Twitch Drops Campaigns Overview",
@@ -278,9 +301,11 @@ class DiscordBotService:
                     hours = (c.ends_at - now).total_seconds() / 3600
                     time_str = f"{hours:.1f}h left" if hours > 0 else "Ending"
                     
+                    exclude_set = getattr(service.twitch.settings, "exclude", set())
+                    is_excluded = bool(is_game_excluded(c.game.name, exclude_set))
                     if c.game.name in priority_set:
                         prefix = "⭐ **[PRIORITY]**"
-                    elif c.game.name in exclude_set:
+                    elif is_excluded:
                         prefix = "🚫 **[EXCLUDED]**"
                     else:
                         prefix = "•"
@@ -295,15 +320,25 @@ class DiscordBotService:
                         desc += f"\n*... and {len(lines) - 25} more campaigns*"
                     embed.description = desc
 
-                await interaction.followup.send(embed=embed)
+                if deferred:
+                    await interaction.followup.send(embed=embed)
+                elif interaction.channel:
+                    await interaction.channel.send(embed=embed)
             except Exception as e:
                 logger.error(f"Error in /games command: {e}", exc_info=True)
-                await interaction.followup.send(f"⚠️ Error retrieving campaigns: {e}", ephemeral=True)
+                if deferred:
+                    await interaction.followup.send(f"⚠️ Error retrieving campaigns: {e}", ephemeral=True)
 
         # --- /drops Command ---
         @bot.tree.command(name="drops", description="Show detailed drop progress across active campaigns")
         async def cmd_drops(interaction: discord.Interaction):
-            await interaction.response.defer()
+            deferred = False
+            try:
+                await interaction.response.defer()
+                deferred = True
+            except discord.NotFound:
+                logger.warning("Discord interaction for /drops expired before deferral (network latency > 3s).")
+
             try:
                 now = datetime.now(timezone.utc)
                 priority_set = set(service.twitch.settings.priority)
@@ -343,10 +378,14 @@ class DiscordBotService:
                 if fields_count == 0:
                     embed.description = "No active drop campaigns found."
 
-                await interaction.followup.send(embed=embed)
+                if deferred:
+                    await interaction.followup.send(embed=embed)
+                elif interaction.channel:
+                    await interaction.channel.send(embed=embed)
             except Exception as e:
                 logger.error(f"Error in /drops command: {e}", exc_info=True)
-                await interaction.followup.send(f"⚠️ Error retrieving drops: {e}", ephemeral=True)
+                if deferred:
+                    await interaction.followup.send(f"⚠️ Error retrieving drops: {e}", ephemeral=True)
 
         # --- /help Command ---
         @bot.tree.command(name="help", description="Show overview of available Twitch Drops Miner bot commands")
@@ -627,8 +666,22 @@ class DiscordBotService:
         # --- /settings Command ---
         @bot.tree.command(name="settings", description="View and configure miner settings interactively")
         async def cmd_settings(interaction: discord.Interaction):
+            deferred = False
+            try:
+                await interaction.response.defer(ephemeral=True)
+                deferred = True
+            except discord.NotFound:
+                logger.warning("Discord interaction for /settings expired before deferral (network latency > 3s).")
+
             if not service.is_authorized(interaction):
-                await interaction.response.send_message("⛔ Unauthorized.", ephemeral=True)
+                msg = "⛔ Unauthorized."
+                if deferred:
+                    await interaction.followup.send(msg, ephemeral=True)
+                else:
+                    try:
+                        await interaction.response.send_message(msg, ephemeral=True)
+                    except Exception:
+                        pass
                 return
 
             settings = service.twitch.settings
@@ -656,7 +709,10 @@ class DiscordBotService:
             embed.add_field(name="Summary Interval", value=f"`{settings.discord_summary_interval_minutes}m`", inline=True)
 
             view = SettingsView(service)
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            if deferred:
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            elif interaction.channel:
+                await interaction.channel.send(embed=embed, view=view)
 
         # --- /notifications Group ---
         notify_group = app_commands.Group(name="notifications", description="Manage Discord webhook notifications and weekly reports")
@@ -757,7 +813,13 @@ class DiscordBotService:
         # --- /weekly Command (Top-Level Shortcut) ---
         @bot.tree.command(name="weekly", description="View and send the 7-day weekly mining summary")
         async def cmd_weekly(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=False)
+            deferred = False
+            try:
+                await interaction.response.defer(ephemeral=False)
+                deferred = True
+            except discord.NotFound:
+                logger.warning("Discord interaction for /weekly expired before deferral (network latency > 3s).")
+
             try:
                 metrics = getattr(service.twitch, "metrics", None)
                 if metrics:
@@ -791,10 +853,14 @@ class DiscordBotService:
                     await service.twitch.discord.send_weekly_summary(force=True)
                     embed.set_footer(text="A copy was also dispatched to your Discord webhook.")
 
-                await interaction.followup.send(embed=embed)
+                if deferred:
+                    await interaction.followup.send(embed=embed)
+                elif interaction.channel:
+                    await interaction.channel.send(embed=embed)
             except Exception as e:
                 logger.error(f"Error in /weekly command: {e}", exc_info=True)
-                await interaction.followup.send(f"⚠️ Error preparing weekly report: {e}", ephemeral=True)
+                if deferred:
+                    await interaction.followup.send(f"⚠️ Error preparing weekly report: {e}", ephemeral=True)
         @bot.tree.command(name="2fa", description="Provide 2FA token for Playwright login")
         async def cmd_2fa(interaction: discord.Interaction, code: str):
             if not service.is_authorized(interaction):

@@ -16,6 +16,7 @@ from aiohttp import web
 
 from constants import State, PriorityMode
 from cookie_refresher import SCREENSHOT_2FA_PATH, TOKEN_2FA_PATH
+from utils import is_game_excluded
 
 try:
     import psutil
@@ -575,7 +576,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         async function fetchStatus() {
             try {
                 const res = await fetch('/api/status');
-                if (!res.ok) return;
+                if (!res.ok) {
+                    console.error("Status fetch failed with status:", res.status);
+                    return;
+                }
                 const data = await res.json();
                 updateOverviewUI(data);
             } catch (err) {
@@ -617,15 +621,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (memBadge) memBadge.innerText = `RAM: ${data.system.memory_mb}MB`;
             }
 
-            if (data.metrics && data.metrics.uptime_hours !== undefined) {
+            if (data.metrics) {
                 const uptimeText = document.getElementById('uptime-text');
-                if (uptimeText) uptimeText.innerText = `Uptime: ${data.metrics.uptime_hours}h`;
+                if (uptimeText && data.metrics.uptime_hours !== undefined) {
+                    uptimeText.innerText = `Uptime: ${data.metrics.uptime_hours}h`;
+                }
                 const statClaimed = document.getElementById('stat-claimed');
-                if (statClaimed) statClaimed.innerText = data.metrics.claimed_drops || 0;
+                const claimedVal = data.metrics.claimed_drops ?? data.metrics.drops_claimed ?? 0;
+                if (statClaimed) statClaimed.innerText = claimedVal;
                 const statWatch = document.getElementById('stat-watch-time');
-                if (statWatch) statWatch.innerText = `${data.metrics.watch_time_hours || 0}h`;
+                const watchVal = data.metrics.watch_time_hours ?? (data.metrics.total_minutes_watched ? (data.metrics.total_minutes_watched / 60).toFixed(1) : 0);
+                if (statWatch) statWatch.innerText = `${watchVal}h`;
                 const statRate = document.getElementById('stat-rate');
-                if (statRate) statRate.innerText = `${data.metrics.success_rate || 100}%`;
+                const rateVal = data.metrics.success_rate ?? data.metrics.watch_success_rate ?? 100;
+                if (statRate) statRate.innerText = `${typeof rateVal === 'number' ? rateVal.toFixed(0) : rateVal}%`;
             }
 
             const statMode = document.getElementById('stat-mode');
@@ -1452,6 +1461,7 @@ class WebDashboard:
         channel_data = None
         drop_data = None
         campaigns_data = []
+        now = datetime.now(timezone.utc)
 
         # 1. Channel Info
         watching_channel = self.twitch.watching_channel.get_with_default(None)
@@ -1480,6 +1490,8 @@ class WebDashboard:
         # 3. Campaigns List
         priority_list = self.twitch.settings.priority
         priority_set = set(priority_list)
+        exclude_raw = getattr(self.twitch.settings, "exclude", set())
+        exclude_set = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
         for camp in sorted(self.twitch.inventory, key=lambda c: (
             0 if c.game.name in priority_set else 1,
             priority_list.index(c.game.name) if c.game.name in priority_set else 0,
@@ -1488,6 +1500,7 @@ class WebDashboard:
             hours_left = (camp.ends_at - now).total_seconds() / 3600
             time_left_str = f"{hours_left:.1f}h left" if hours_left > 0 else "Ending"
             rank = (priority_list.index(camp.game.name) + 1) if camp.game.name in priority_set else None
+            is_excl = bool(is_game_excluded(camp.game.name, exclude_set))
             campaigns_data.append({
                 "game": camp.game.name,
                 "name": camp.name,
@@ -1495,6 +1508,7 @@ class WebDashboard:
                 "total": camp.total_drops,
                 "progress_percent": int(camp.progress * 100),
                 "is_priority": camp.game.name in priority_set,
+                "is_excluded": is_excl,
                 "priority_rank": rank,
                 "time_left": time_left_str,
             })
@@ -1503,6 +1517,17 @@ class WebDashboard:
         metrics_stats = {}
         if metrics := getattr(self.twitch, "metrics", None):
             metrics_stats = metrics.get_stats()
+
+        inv_claimed = sum(getattr(c, "claimed_drops", 0) for c in getattr(self.twitch, "inventory", []))
+        total_claimed = max(metrics_stats.get("drops_claimed", 0), inv_claimed)
+        metrics_stats["drops_claimed"] = total_claimed
+        metrics_stats["claimed_drops"] = total_claimed
+        if "uptime_hours" in metrics_stats:
+            metrics_stats["uptime_hours"] = round(metrics_stats["uptime_hours"], 1)
+        if "total_minutes_watched" in metrics_stats:
+            metrics_stats["watch_time_hours"] = round(metrics_stats["total_minutes_watched"] / 60, 1)
+        if "watch_success_rate" in metrics_stats:
+            metrics_stats["success_rate"] = round(metrics_stats["watch_success_rate"], 1)
 
         # System Memory Info
         memory_mb = None
@@ -1523,13 +1548,13 @@ class WebDashboard:
                 "memory_mb": memory_mb,
             },
             "network": {
-                "healthy": getattr(self.twitch, "is_network_healthy", True),
-                "consecutive_failures": getattr(self.twitch, "_consecutive_gql_failures", 0),
+                "healthy": bool(getattr(self.twitch, "is_network_healthy", True)),
+                "consecutive_failures": int(getattr(self.twitch, "_consecutive_gql_failures", 0) or 0),
             },
             "discord": {
-                "enabled": getattr(self.twitch.settings, "discord_notifications_enabled", True),
-                "has_webhook": bool(self.twitch.settings.discord_webhook_url.strip()),
-                "interval_minutes": self.twitch.settings.discord_summary_interval_minutes,
+                "enabled": bool(getattr(self.twitch.settings, "discord_notifications_enabled", True)),
+                "has_webhook": bool(str(getattr(self.twitch.settings, "discord_webhook_url", "")).strip()),
+                "interval_minutes": int(getattr(self.twitch.settings, "discord_summary_interval_minutes", 60) or 60),
             },
             "has_password": bool(self.password),
             "two_factor_pending": SCREENSHOT_2FA_PATH.exists(),
@@ -2032,7 +2057,7 @@ class WebDashboard:
         )):
             game_name = camp.game.name if getattr(camp, "game", None) else "Unknown"
             is_prio = game_name in priority_set
-            is_excl = game_name in exclude_set
+            is_excl = bool(is_game_excluded(game_name, exclude_set))
             rank = (priority_list.index(game_name) + 1) if is_prio else None
 
             time_left_str = "Ending"

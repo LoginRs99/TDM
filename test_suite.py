@@ -846,5 +846,193 @@ class TestJsonSaveAndPriorityRanking(unittest.TestCase):
         self.assertEqual(priority[0], "Apex Legends")
 
 
+class TestBugFixesAndRegression(unittest.TestCase):
+    """Regression tests for the 4 issues reported in user production."""
+
+    def test_is_game_excluded_franchise_and_subtitles(self):
+        """Verify is_game_excluded handles casing, subtitles, platform suffixes, and annual titles"""
+        from utils import is_game_excluded, get_game_root
+
+        # 1. Root franchise extraction
+        self.assertEqual(get_game_root("World of Tanks: HEAT"), "world of tanks")
+        self.assertEqual(get_game_root("World of Tanks Console"), "world of tanks")
+        self.assertEqual(get_game_root("World of Tanks"), "world of tanks")
+        self.assertEqual(get_game_root("EA Sports College Football 26"), "ea sports college football")
+        self.assertEqual(get_game_root("EA Sports College Football 27"), "ea sports college football")
+        self.assertEqual(get_game_root("NBA 2K26"), "nba 2k")
+        self.assertEqual(get_game_root("NBA 2K27"), "nba 2k")
+        self.assertEqual(get_game_root("Out of the Park Baseball 26"), "out of the park baseball")
+        self.assertEqual(get_game_root("Out of the Park Baseball 27"), "out of the park baseball")
+
+        # 2. Case-insensitive exact match
+        self.assertTrue(is_game_excluded("World of Tanks", {"world of tanks"}))
+        self.assertTrue(is_game_excluded("world of tanks", {"World of Tanks"}))
+
+        # 3. Subtitle / edition match: Exclude "World of Tanks" -> matches "World of Tanks: HEAT"
+        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks"}))
+
+        # 4. Platform edition / root match: Exclude "World of Tanks Console" -> matches "World of Tanks: HEAT"
+        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks Console"}))
+        self.assertTrue(is_game_excluded("World of Tanks", {"World of Tanks Console"}))
+
+        # 5. Annual sports edition mismatch from user logs
+        self.assertTrue(is_game_excluded("EA Sports College Football 27", {"EA Sports College Football 26"}))
+        self.assertTrue(is_game_excluded("EA Sports College Football 28", {"EA Sports College Football 27"}))
+        self.assertTrue(is_game_excluded("NBA 2K27", {"NBA 2K26"}))
+        self.assertTrue(is_game_excluded("Out of the Park Baseball 27", {"Out of the Park Baseball 26"}))
+
+        # 6. Negative matches: verify no false positives
+        self.assertFalse(is_game_excluded("World of Warcraft", {"World of Tanks"}))
+        self.assertFalse(is_game_excluded("Warframe", {"War"}))
+        self.assertFalse(is_game_excluded("The Finals", {"The"}))
+
+    def test_twitch_exclude_and_can_watch_logic(self):
+        """Verify can_watch and priority calculation reject excluded and non-wanted games"""
+        from twitch import Twitch
+        from channel import Channel
+        from utils import Game
+        from constants import PriorityMode, MAX_INT
+
+        twitch_obj = Twitch.__new__(Twitch)
+        twitch_obj.settings = MagicMock()
+        twitch_obj.settings.exclude = {"World of Tanks"}
+        twitch_obj.settings.priority = ["Rainbow Six Siege"]
+        twitch_obj.settings.priority_mode = PriorityMode.BALANCED
+        twitch_obj.settings.enable_badges_emotes = True
+        twitch_obj._channel_blacklist = {}
+        twitch_obj._game_live_counts = {}
+
+        wot_game = Game({"id": 1001, "displayName": "World of Tanks: HEAT", "name": "World of Tanks: HEAT"})
+        r6_game = Game({"id": 1002, "displayName": "Rainbow Six Siege", "name": "Rainbow Six Siege"})
+
+        twitch_obj.wanted_games = [r6_game]
+
+        # Channel for World of Tanks: HEAT
+        wot_channel = MagicMock(spec=Channel)
+        wot_channel.id = 5001
+        wot_channel.name = "wot_streamer"
+        wot_channel.game = wot_game
+        wot_channel.online = True
+        wot_channel.drops_enabled = True
+
+        # Mock campaign for WoT
+        wot_campaign = MagicMock()
+        wot_campaign.game = wot_game
+        wot_campaign.has_badge_or_emote = False
+        wot_campaign.can_earn.return_value = True
+        twitch_obj.inventory = [wot_campaign]
+
+        # 1. can_watch must be False for WoT channel even if not c.has_badge_or_emote
+        self.assertFalse(twitch_obj.can_watch(wot_channel))
+
+        # 2. get_balanced_priority must return inf for excluded game
+        self.assertEqual(twitch_obj.get_balanced_priority(wot_channel), float('inf'))
+
+        # 3. get_priority must return MAX_INT in non-balanced mode
+        twitch_obj.settings.priority_mode = PriorityMode.PRIORITY_ONLY
+        self.assertEqual(twitch_obj.get_priority(wot_channel), MAX_INT)
+
+    def test_web_dashboard_status_now_and_metrics(self):
+        """Verify handle_status defines now correctly, serializes campaigns without NameError, and maps metrics"""
+        import json
+        from web_dashboard import WebDashboard
+        from utils import Game
+        from aiohttp.test_utils import make_mocked_request
+        from datetime import datetime, timezone, timedelta
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings.priority = ["Rust"]
+        mock_twitch.settings.exclude = {"World of Tanks"}
+        mock_twitch.settings.priority_mode.name = "BALANCED"
+        mock_twitch.settings.discord_notifications_enabled = True
+        mock_twitch.settings.discord_webhook_url = ""
+        mock_twitch.settings.discord_summary_interval_minutes = 60
+        mock_twitch.watching_channel.get_with_default.return_value = None
+        mock_twitch.get_active_campaign.return_value = None
+        mock_twitch._state.name = "IDLE"
+        mock_twitch.is_network_healthy = True
+        mock_twitch._consecutive_gql_failures = 0
+
+        # Create active mock campaign with ends_at in future
+        mock_camp = MagicMock()
+        mock_camp.game = Game({"id": 1234, "displayName": "Rust", "name": "Rust"})
+        mock_camp.name = "Rust Community Drops"
+        mock_camp.claimed_drops = 7
+        mock_camp.total_drops = 10
+        mock_camp.progress = 0.7
+        mock_camp.ends_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        mock_camp.active_drop = None
+        mock_twitch.inventory = [mock_camp]
+
+        # Mock metrics with stats
+        mock_metrics = MagicMock()
+        mock_metrics.get_stats.return_value = {
+            "drops_claimed": 5,
+            "drops_failed": 0,
+            "uptime_hours": 12.5,
+            "watch_success_rate": 98.5,
+            "total_minutes_watched": 750,
+        }
+        mock_twitch.metrics = mock_metrics
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        req = make_mocked_request("GET", "/api/status")
+
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(dashboard.handle_status(req))
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.text)
+
+            # Check that campaign calculation with now succeeded
+            self.assertEqual(len(data["campaigns"]), 1)
+            camp_data = data["campaigns"][0]
+            self.assertEqual(camp_data["game"], "Rust")
+            self.assertTrue(camp_data["time_left"].endswith("h left"))
+
+            # Check metrics mapping and total claimed drops
+            metrics_data = data["metrics"]
+            self.assertEqual(metrics_data["drops_claimed"], 7)  # max(5, 7 from inventory)
+            self.assertEqual(metrics_data["claimed_drops"], 7)
+            self.assertEqual(metrics_data["watch_time_hours"], 12.5)
+            self.assertEqual(metrics_data["success_rate"], 98.5)
+        finally:
+            loop.close()
+
+    def test_discord_bot_interaction_timeout_handling(self):
+        """Verify Discord bot suppresses 10062 Unknown Interaction errors cleanly"""
+        from discord_bot import DiscordBotService
+        from discord.app_commands import CommandInvokeError
+        import discord
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings.discord_bot_token = "MOCK_TOKEN"
+        mock_twitch.settings.discord_owner_id = ""
+
+        service = DiscordBotService(mock_twitch)
+
+        # Mock an expired interaction
+        mock_interaction = MagicMock()
+        mock_interaction.command.name = "status"
+
+        # Create mock 10062 NotFound error
+        resp = MagicMock()
+        resp.status = 404
+        data = {"code": 10062, "message": "Unknown interaction"}
+        not_found_err = discord.NotFound(resp, data)
+        cmd_err = CommandInvokeError(mock_interaction.command, not_found_err)
+
+        # Verify on_app_command_error handles 10062 without raising or calling followup
+        loop = asyncio.new_event_loop()
+        try:
+            tree_err_handler = service.bot.tree.error
+            # Call error handler
+            loop.run_until_complete(service.bot.tree.on_error(mock_interaction, cmd_err))
+            # Verify followup.send was NOT called (interaction already expired)
+            mock_interaction.followup.send.assert_not_called()
+        finally:
+            loop.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

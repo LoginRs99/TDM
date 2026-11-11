@@ -44,6 +44,7 @@ from utils import (
     RateLimiter,
     AwaitableValue,
     ExponentialBackoff,
+    is_game_excluded,
 )
 from constants import (
     CALL,
@@ -391,6 +392,13 @@ class Twitch:
         
     def update_healthcheck(self, *, error: bool = False) -> None:
         self.healthcheck.update_status(self._consecutive_gql_failures, error=error)
+
+    def is_game_excluded(self, game: Game | str | None) -> bool:
+        """Checks if a game is excluded, handling casing, subtitles, and franchises."""
+        if game is None:
+            return False
+        name = game.name if hasattr(game, "name") else str(game)
+        return is_game_excluded(name, self.settings.exclude)
         
     def get_balanced_priority(self, channel: Channel) -> float:
         """
@@ -400,7 +408,9 @@ class Twitch:
         and nearly finished drops get small boosts so short availability windows
         do not get missed.
         """
-        if (game := channel.game) is None:
+        if (game := channel.game) is None or game not in self.wanted_games:
+            return float('inf')
+        if self.is_game_excluded(game):
             return float('inf')
 
         active_campaign = self.get_active_campaign(channel)
@@ -452,6 +462,8 @@ class Twitch:
             return self.get_balanced_priority(channel)
         if (game := channel.game) is None or game not in self.wanted_games:
             return MAX_INT
+        if self.is_game_excluded(game):
+            return MAX_INT
         return self.wanted_games.index(game)
 
     @staticmethod
@@ -493,7 +505,10 @@ class Twitch:
 
         available_set = set(available_names)
         invalid_priority = [name for name in priority_names if name not in available_set]
-        invalid_exclude = [name for name in exclude_names if name not in available_set]
+        invalid_exclude = [
+            name for name in exclude_names
+            if name not in available_set and not any(is_game_excluded(avail, [name]) for avail in available_names)
+        ]
         if not invalid_priority and not invalid_exclude:
             return
 
@@ -550,7 +565,7 @@ class Twitch:
         all_campaigns = [
             c for c in self.inventory 
             if (not c.has_badge_or_emote or self.settings.enable_badges_emotes)
-            and c.game.name not in self.settings.exclude
+            and not self.is_game_excluded(c.game)
             and c.can_earn_within(now + timedelta(days=7))
         ]
         
@@ -710,7 +725,7 @@ class Twitch:
                 logger.info("State: CHANNELS_CLEANUP")
                 to_remove = [
                     ch for ch in channels.values() 
-                    if full_cleanup or (not ch.acl_based and (ch.offline or ch.game not in self.wanted_games))
+                    if full_cleanup or ch.offline or ch.game is None or ch.game not in self.wanted_games or self.is_game_excluded(ch.game)
                 ]
                 if to_remove:
                     topics = [WebsocketTopic.as_str("Channel", name, ch.id) for ch in to_remove for name in ("StreamState", "StreamUpdate")]
@@ -953,7 +968,15 @@ class Twitch:
                 return False
 
         if not channel.online or not channel.drops_enabled: return False
-        return any(c.can_earn(channel) for c in self.inventory if c.game in self.wanted_games or not c.has_badge_or_emote)
+        if channel.game is None or channel.game not in self.wanted_games:
+            return False
+        if self.is_game_excluded(channel.game):
+            return False
+        return any(
+            c.can_earn(channel) 
+            for c in self.inventory 
+            if c.game in self.wanted_games and (not c.has_badge_or_emote or self.settings.enable_badges_emotes)
+        )
 
     def should_switch(self, channel: Channel) -> bool:
         # ADD: candidate must be watchable first
