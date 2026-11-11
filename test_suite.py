@@ -1037,5 +1037,123 @@ class TestBugFixesAndRegression(unittest.TestCase):
             loop.close()
 
 
+class TestDashboardQOLFeatures(unittest.TestCase):
+    def test_format_box_art(self):
+        """Verify format_box_art correctly handles templates, dimensions, and fallbacks"""
+        from web_dashboard import format_box_art
+
+        # Templated dimensions
+        tpl = "https://static-cdn.jtvnw.net/ttv-boxart/516575_{width}x{height}.jpg"
+        self.assertEqual(format_box_art(tpl, 144, 192), "https://static-cdn.jtvnw.net/ttv-boxart/516575_144x192.jpg")
+        self.assertEqual(format_box_art(tpl, 188, 250), "https://static-cdn.jtvnw.net/ttv-boxart/516575_188x250.jpg")
+
+        # Un-dimensioned ttv-boxart
+        undim = "https://static-cdn.jtvnw.net/ttv-boxart/516575.png"
+        self.assertEqual(format_box_art(undim, 144, 192), "https://static-cdn.jtvnw.net/ttv-boxart/516575-144x192.png")
+
+        # Mock and None fallbacks
+        self.assertIsNone(format_box_art(None))
+        self.assertIsNone(format_box_art(""))
+        self.assertIsNone(format_box_art(MagicMock()))
+
+    def test_active_farm_recognition_and_rich_metadata(self):
+        """Verify dashboard status exposes active farm recognition, drop thumbnails, and box art"""
+        from web_dashboard import WebDashboard
+        import json
+        from datetime import datetime, timezone, timedelta
+        from aiohttp.test_utils import make_mocked_request
+
+        mock_camp1 = MagicMock()
+        mock_camp1.id = "camp-active-123"
+        mock_camp1.name = "Rust Twitch Rivals"
+        mock_camp1.game.name = "Rust"
+        mock_camp1.image_url = "https://static-cdn.jtvnw.net/ttv-boxart/263490_{width}x{height}.jpg"
+        mock_camp1.claimed_drops = 2
+        mock_camp1.total_drops = 5
+        mock_camp1.progress = 0.4
+        mock_camp1.ends_at = datetime.now(timezone.utc) + timedelta(hours=10)
+
+        mock_benefit = MagicMock()
+        mock_benefit.name = "Exclusive Hazmat Skin"
+        mock_benefit.image_url = "https://static-cdn.jtvnw.net/custom-drop-assets/hazmat.png"
+
+        mock_drop = MagicMock()
+        mock_drop.id = "drop-hazmat-999"
+        mock_drop.name = "Hazmat Suit"
+        mock_drop.rewards_text.return_value = "Exclusive Hazmat Skin"
+        mock_drop.required_minutes = 120
+        mock_drop.current_minutes = 60
+        mock_drop.remaining_minutes = 60
+        mock_drop.progress = 0.5
+        mock_drop.benefits = [mock_benefit]
+        mock_camp1.active_drop = mock_drop
+
+        mock_camp2 = MagicMock()
+        mock_camp2.id = "camp-idle-456"
+        mock_camp2.name = "Warframe TennoCon"
+        mock_camp2.game.name = "Warframe"
+        mock_camp2.image_url = "https://static-cdn.jtvnw.net/ttv-boxart/warframe_{width}x{height}.jpg"
+        mock_camp2.claimed_drops = 0
+        mock_camp2.total_drops = 3
+        mock_camp2.progress = 0.0
+        mock_camp2.ends_at = datetime.now(timezone.utc) + timedelta(hours=48)
+        mock_camp2.active_drop = None
+
+        mock_channel = MagicMock()
+        mock_channel.name = "shroud"
+        mock_channel.viewers = 45120
+        mock_channel.stream_title = "Rivals Tournament Day 2 !drops"
+        mock_channel.game.name = "Rust"
+        mock_channel.game.box_art_url = "https://static-cdn.jtvnw.net/ttv-boxart/263490_{width}x{height}.jpg"
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings.priority = ["Rust"]
+        mock_twitch.settings.exclude = set()
+        mock_twitch.settings.priority_mode.name = "BALANCED"
+        mock_twitch.settings.discord_notifications_enabled = True
+        mock_twitch.settings.discord_webhook_url = ""
+        mock_twitch.settings.discord_summary_interval_minutes = 60
+        mock_twitch.watching_channel.get_with_default.return_value = mock_channel
+        mock_twitch.get_active_campaign.return_value = mock_camp1
+        mock_twitch.inventory = [mock_camp1, mock_camp2]
+        mock_twitch.metrics.get_stats.return_value = {"drops_claimed": 15}
+        mock_twitch._state.name = "ACTIVE"
+        mock_twitch.is_network_healthy = True
+        mock_twitch._consecutive_gql_failures = 0
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        req = make_mocked_request("GET", "/api/status")
+
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(dashboard.handle_status(req))
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.text)
+
+            # Active channel data
+            self.assertIsNotNone(data["channel"])
+            self.assertEqual(data["channel"]["name"], "shroud")
+            self.assertEqual(data["channel"]["viewers"], 45120)
+            self.assertEqual(data["channel"]["title"], "Rivals Tournament Day 2 !drops")
+            self.assertTrue("144x192" in data["channel"]["box_art_url"])
+
+            # Active drop thumbnail and benefit info
+            self.assertIsNotNone(data["drop"])
+            self.assertEqual(data["drop"]["benefit_name"], "Exclusive Hazmat Skin")
+            self.assertEqual(data["drop"]["benefit_image"], "https://static-cdn.jtvnw.net/custom-drop-assets/hazmat.png")
+            self.assertEqual(data["drop"]["remaining_minutes"], 60)
+
+            # Active farm recognition across campaigns
+            camps = data["campaigns"]
+            self.assertEqual(len(camps), 2)
+            active_c = next(c for c in camps if c["id"] == "camp-active-123")
+            idle_c = next(c for c in camps if c["id"] == "camp-idle-456")
+            self.assertTrue(active_c["is_currently_farming"])
+            self.assertFalse(idle_c["is_currently_farming"])
+            self.assertTrue("144x192" in active_c["box_art_url"])
+        finally:
+            loop.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

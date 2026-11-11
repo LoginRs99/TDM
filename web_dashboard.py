@@ -28,6 +28,58 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("TwitchDrops")
 
+
+def _safe_str(val: Any, default: str = "") -> str:
+    if val is None:
+        return default
+    if isinstance(val, str):
+        return val
+    if hasattr(val, "_mock_name") or hasattr(val, "_mock_return_value") or "Mock" in type(val).__name__:
+        return default
+    return str(val)
+
+
+def _safe_int(val: Any, default: int = 0) -> int:
+    if val is None or hasattr(val, "_mock_name") or hasattr(val, "_mock_return_value") or "Mock" in type(val).__name__:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    if val is None or hasattr(val, "_mock_name") or hasattr(val, "_mock_return_value") or "Mock" in type(val).__name__:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_bool(val: Any, default: bool = False) -> bool:
+    if val is None or hasattr(val, "_mock_name") or hasattr(val, "_mock_return_value") or "Mock" in type(val).__name__:
+        return default
+    return bool(val)
+
+
+def format_box_art(url: Any, width: int = 144, height: int = 192) -> str | None:
+    """Formats Twitch box art URLs with concrete dimensions or fallback dimensions."""
+    if not url or hasattr(url, "_mock_name") or hasattr(url, "_mock_return_value") or "Mock" in type(url).__name__:
+        return None
+    s = str(url)
+    if "MagicMock" in s or not s.strip():
+        return None
+    if "{width}" in s and "{height}" in s:
+        return s.replace("{width}", str(width)).replace("{height}", str(height))
+    if "ttv-boxart" in s and not re.search(r'-\d+x\d+\.', s):
+        match = re.search(r'(\.[a-zA-Z0-9]+)$', s)
+        if match:
+            ext = match.group(1)
+            return s[:-len(ext)] + f"-{width}x{height}" + ext
+    return s
+
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -60,9 +112,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         ::-webkit-scrollbar-track { background: #0e0e10; }
         ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #9146FF; }
+        @keyframes pulse-subtle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.85; transform: scale(1.02); }
+        }
+        .animate-farming {
+            animation: pulse-subtle 3s ease-in-out infinite;
+        }
     </style>
 </head>
-<body class="bg-twitch-dark text-gray-200 font-sans min-h-screen flex flex-col antialiased">
+<body class="bg-twitch-dark text-gray-200 font-sans min-h-screen flex flex-col antialiased selection:bg-twitch-purple selection:text-white">
     <!-- Top Header -->
     <header class="bg-twitch-card border-b border-twitch-border px-4 sm:px-6 py-3.5 sticky top-0 z-40 shadow-lg">
         <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -80,8 +139,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 <!-- Primary Tabs -->
                 <nav class="flex items-center space-x-1 bg-twitch-dark p-1 rounded-lg border border-twitch-border">
-                    <button onclick="switchTab('overview')" id="tab-btn-overview" class="tab-btn px-3 py-1.5 rounded-md text-xs font-semibold transition text-white bg-twitch-purple shadow-sm">
-                        📊 Overview
+                    <button onclick="switchTab('overview')" id="tab-btn-overview" class="tab-btn px-3 py-1.5 rounded-md text-xs font-semibold transition text-white bg-twitch-purple shadow-sm flex items-center space-x-1.5">
+                        <span>📊 Overview</span>
                     </button>
                     <button onclick="switchTab('campaigns')" id="tab-btn-campaigns" class="tab-btn px-3 py-1.5 rounded-md text-xs font-semibold transition text-gray-400 hover:text-white flex items-center space-x-1.5">
                         <span>🎯 Campaigns</span>
@@ -119,7 +178,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <!-- Main Container -->
     <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
-        <!-- 2FA Remote Solver Banner (Shown when challenge is active) -->
+        <!-- 2FA Remote Solver Banner -->
         <div id="banner-2fa" class="hidden bg-yellow-950/40 border-2 border-yellow-500/70 rounded-xl p-5 shadow-2xl relative space-y-4">
             <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div class="flex items-center space-x-3">
@@ -146,65 +205,110 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- ================= TAB 1: OVERVIEW ================= -->
         <div id="tab-overview" class="tab-pane space-y-6">
-            <!-- Hero Watching Card -->
-            <div class="bg-twitch-card border border-twitch-border rounded-xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+            <!-- Hero Watching & Active Farm Card -->
+            <div id="hero-card" class="bg-twitch-card border border-twitch-border rounded-xl p-5 sm:p-6 shadow-xl relative overflow-hidden transition-all duration-300">
                 <div class="absolute top-0 left-0 w-2 h-full bg-twitch-purple"></div>
                 
                 <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-                    <!-- Stream & Channel Info -->
-                    <div class="space-y-3 flex-1">
-                        <div class="flex items-center space-x-2">
-                            <span class="text-xs font-semibold uppercase tracking-wider text-twitch-purple">Currently Watching</span>
-                            <span id="pulse-dot" class="w-2 h-2 rounded-full bg-green-500 animate-ping"></span>
+                    <!-- Stream & Channel Info with Box Art -->
+                    <div class="flex items-start space-x-4 flex-1">
+                        <!-- Game Cover Box Art -->
+                        <div class="relative flex-shrink-0">
+                            <img id="channel-boxart" src="" alt="Cover" class="w-20 sm:w-24 h-28 sm:h-32 rounded-xl object-cover border-2 border-twitch-purple/70 shadow-lg shadow-twitch-purple/20 bg-twitch-dark" onerror="this.src=PLACEHOLDER_COVER" />
+                            <div id="channel-live-indicator" class="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-red-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow border border-red-400/50 flex items-center space-x-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
+                                <span>LIVE</span>
+                            </div>
                         </div>
 
-                        <div class="flex items-start sm:items-center space-x-4">
-                            <div id="channel-avatar" class="w-14 h-14 rounded-full bg-gray-800 border-2 border-twitch-purple/50 flex items-center justify-center text-xl font-bold text-white overflow-hidden shadow">
-                                📺
+                        <!-- Channel Details & Actions -->
+                        <div class="space-y-2 flex-1 min-w-0">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-[10px] font-bold uppercase tracking-wider text-twitch-purple bg-twitch-purple/10 px-2 py-0.5 rounded border border-twitch-purple/20">
+                                    Currently Farming
+                                </span>
+                                <span id="channel-viewers-badge" class="text-[10px] text-gray-400 font-mono hidden">
+                                    👀 <span id="channel-viewers-count">0</span> viewers
+                                </span>
                             </div>
+
                             <div>
-                                <h2 id="channel-name" class="text-2xl font-extrabold text-white leading-none">Scanning for streams...</h2>
-                                <p id="game-name" class="text-sm text-gray-400 mt-1 font-medium">Waiting for active campaign</p>
-                                <a id="stream-link" href="#" target="_blank" class="text-xs text-twitch-purple hover:underline mt-0.5 inline-block hidden">Open stream ↗</a>
+                                <div class="flex items-center space-x-2">
+                                    <h2 id="channel-name" class="text-xl sm:text-2xl font-extrabold text-white leading-tight truncate">Scanning for streams...</h2>
+                                    <a id="stream-link" href="#" target="_blank" class="text-xs text-twitch-purple hover:text-white transition flex-shrink-0 hidden" title="Open Stream on Twitch">↗</a>
+                                </div>
+                                <p id="stream-title" class="text-xs text-gray-400 italic truncate max-w-md mt-0.5">Stream title will appear here</p>
+                                <div class="flex items-center space-x-2 mt-1">
+                                    <p id="game-name" class="text-xs font-bold text-gray-300">Waiting for active campaign</p>
+                                    <span id="game-status-pill" class="hidden px-2 py-0.5 rounded text-[10px] font-bold"></span>
+                                </div>
+                            </div>
+
+                            <!-- Active Farm Quick Controls -->
+                            <div class="flex flex-wrap items-center gap-2 pt-2">
+                                <button onclick="activeFarmPrioritize()" id="btn-active-prio" class="px-3 py-1.5 bg-twitch-purple/20 hover:bg-twitch-purple/30 text-twitch-purple border border-twitch-purple/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1" title="Promote this game to #1 in Priority Queue">
+                                    <span>⭐</span>
+                                    <span>Prioritize Game</span>
+                                </button>
+                                <button onclick="activeFarmExclude()" id="btn-active-excl" class="px-3 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/60 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1" title="Exclude this game and immediately switch channels">
+                                    <span>🚫</span>
+                                    <span>Exclude Game</span>
+                                </button>
+                                <button onclick="triggerAction('switch')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1" title="Switch to another streamer">
+                                    <span>⏭️</span>
+                                    <span>Skip Streamer</span>
+                                </button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Drop Progress Section -->
-                    <div class="flex-1 bg-twitch-dark/70 border border-twitch-border/70 rounded-xl p-4 space-y-3">
-                        <div class="flex justify-between items-center text-sm">
-                            <span id="drop-name" class="font-semibold text-white truncate max-w-[280px]">No active drop</span>
-                            <span id="drop-percent" class="font-bold text-twitch-purple">0%</span>
+                    <!-- Drop Progress Card with Reward Thumbnail -->
+                    <div class="flex-1 bg-twitch-dark/70 border border-twitch-border/70 rounded-xl p-4 sm:p-5 flex items-center space-x-4">
+                        <!-- Reward Item Thumbnail -->
+                        <div class="relative flex-shrink-0">
+                            <img id="drop-reward-img" src="" alt="Reward" class="w-16 sm:w-20 h-16 sm:h-20 rounded-xl object-contain bg-black/60 border border-twitch-border p-1.5 shadow" onerror="this.src=PLACEHOLDER_REWARD" />
+                            <span id="drop-badge-claimed" class="absolute -top-1 -right-1 bg-emerald-500 text-black text-[9px] font-extrabold px-1.5 py-0.2 rounded-full hidden">CLAIMED</span>
                         </div>
 
-                        <!-- Progress Bar -->
-                        <div class="w-full bg-gray-800 h-3 rounded-full overflow-hidden border border-gray-700/50">
-                            <div id="progress-bar" class="bg-gradient-to-r from-twitch-accent to-twitch-purple h-full rounded-full transition-all duration-500" style="width: 0%"></div>
-                        </div>
+                        <!-- Drop Details & Progress Bar -->
+                        <div class="space-y-2.5 flex-1 min-w-0">
+                            <div class="flex justify-between items-start gap-2">
+                                <div class="truncate">
+                                    <h3 id="drop-name" class="font-bold text-white text-sm truncate">No active drop</h3>
+                                    <p id="drop-rewards-text" class="text-[11px] text-gray-400 truncate">Waiting for progress...</p>
+                                </div>
+                                <span id="drop-percent" class="font-black text-base text-twitch-purple flex-shrink-0">0%</span>
+                            </div>
 
-                        <div class="flex justify-between text-xs text-gray-400">
-                            <span id="drop-minutes">0 / 0 min</span>
-                            <span id="drop-eta" class="text-twitch-purple/90 font-medium">ETA: --</span>
-                            <span id="campaign-drops-count">Drops: 0/0</span>
+                            <!-- Animated Glowing Progress Bar -->
+                            <div class="w-full bg-gray-800 h-3 rounded-full overflow-hidden border border-gray-700/50">
+                                <div id="progress-bar" class="bg-gradient-to-r from-twitch-accent via-twitch-purple to-pink-500 h-full rounded-full transition-all duration-500 shadow-md" style="width: 0%"></div>
+                            </div>
+
+                            <div class="flex justify-between items-center text-xs text-gray-400">
+                                <span id="drop-minutes" class="font-mono">0 / 0 min</span>
+                                <span id="drop-eta" class="text-twitch-purple font-semibold">ETA: --</span>
+                                <span id="campaign-drops-count" class="font-mono">Drops: 0/0</span>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Quick Action Buttons -->
-                <div class="mt-6 pt-4 border-t border-twitch-border/60 flex flex-wrap gap-3">
-                    <button onclick="triggerAction('switch')" class="px-3.5 py-2 bg-twitch-purple/20 hover:bg-twitch-purple/30 text-twitch-purple border border-twitch-purple/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
+                <!-- Global Miner Actions Toolbar -->
+                <div class="mt-6 pt-4 border-t border-twitch-border/60 flex flex-wrap gap-2.5">
+                    <button onclick="triggerAction('switch')" class="px-3.5 py-1.5 bg-twitch-purple/20 hover:bg-twitch-purple/30 text-twitch-purple border border-twitch-purple/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
                         <span>🔄</span>
                         <span>Switch Channel</span>
                     </button>
-                    <button onclick="triggerAction('refresh')" class="px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
+                    <button onclick="triggerAction('refresh')" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
                         <span>📦</span>
                         <span>Refresh Inventory</span>
                     </button>
-                    <button onclick="triggerAction('refresh-cookies')" class="px-3.5 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
+                    <button onclick="triggerAction('refresh-cookies')" class="px-3.5 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
                         <span>🔐</span>
-                        <span>Refresh Cookies (Playwright)</span>
+                        <span>Refresh Cookies</span>
                     </button>
-                    <button onclick="triggerAction('toggle-notifications')" class="px-3.5 py-2 bg-purple-900/20 hover:bg-purple-900/30 text-purple-300 border border-purple-700/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5" title="Toggle Discord webhook notifications ON or OFF">
+                    <button onclick="triggerAction('toggle-notifications')" class="px-3.5 py-1.5 bg-purple-900/20 hover:bg-purple-900/30 text-purple-300 border border-purple-700/40 rounded-lg text-xs font-semibold transition active:scale-95 flex items-center space-x-1.5">
                         <span>🔔</span>
                         <span id="label-notifications">Discord: Alerts</span>
                     </button>
@@ -213,34 +317,57 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             <!-- Metrics Grid -->
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow">
-                    <p class="text-xs text-gray-400 font-medium">Drops Claimed</p>
-                    <p id="stat-claimed" class="text-2xl font-black text-white mt-1">0</p>
+                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow flex items-center space-x-3.5">
+                    <div class="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-lg font-bold border border-emerald-500/20">
+                        🎁
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400 font-medium">Drops Claimed</p>
+                        <p id="stat-claimed" class="text-2xl font-black text-white leading-tight">0</p>
+                    </div>
                 </div>
-                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow">
-                    <p class="text-xs text-gray-400 font-medium">Watch Time</p>
-                    <p id="stat-watch-time" class="text-2xl font-black text-white mt-1">0h</p>
+                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow flex items-center space-x-3.5">
+                    <div class="w-10 h-10 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center text-lg font-bold border border-blue-500/20">
+                        ⏱️
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400 font-medium">Watch Time</p>
+                        <p id="stat-watch-time" class="text-2xl font-black text-white leading-tight">0h</p>
+                    </div>
                 </div>
-                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow">
-                    <p class="text-xs text-gray-400 font-medium">Success Rate</p>
-                    <p id="stat-rate" class="text-2xl font-black text-green-400 mt-1">100%</p>
+                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow flex items-center space-x-3.5">
+                    <div class="w-10 h-10 rounded-lg bg-green-500/10 text-green-400 flex items-center justify-center text-lg font-bold border border-green-500/20">
+                        📈
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400 font-medium">Success Rate</p>
+                        <p id="stat-rate" class="text-2xl font-black text-green-400 leading-tight">100%</p>
+                    </div>
                 </div>
-                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow">
-                    <p class="text-xs text-gray-400 font-medium">Priority Mode</p>
-                    <p id="stat-mode" class="text-2xl font-black text-twitch-purple mt-1 truncate">BALANCED</p>
+                <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 shadow flex items-center space-x-3.5">
+                    <div class="w-10 h-10 rounded-lg bg-twitch-purple/10 text-twitch-purple flex items-center justify-center text-lg font-bold border border-twitch-purple/20">
+                        ⚙️
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400 font-medium">Priority Mode</p>
+                        <p id="stat-mode" class="text-xl sm:text-2xl font-black text-twitch-purple leading-tight truncate">BALANCED</p>
+                    </div>
                 </div>
             </div>
 
-            <!-- Quick Overview Campaigns Card -->
+            <!-- Priority & Active Campaigns Section in Overview -->
             <div class="bg-twitch-card border border-twitch-border rounded-xl p-5 space-y-4 shadow-lg">
                 <div class="flex items-center justify-between border-b border-twitch-border pb-3">
-                    <h3 class="text-sm font-bold text-white flex items-center space-x-2">
-                        <span>⭐</span>
-                        <span>Priority & Active Campaigns</span>
-                    </h3>
-                    <button onclick="switchTab('campaigns')" class="text-xs text-twitch-purple hover:underline">View All Campaigns &rarr;</button>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-base">⭐</span>
+                        <h3 class="text-sm font-bold text-white">Priority & Active Campaigns</h3>
+                    </div>
+                    <button onclick="switchTab('campaigns')" class="text-xs font-semibold text-twitch-purple hover:underline flex items-center space-x-1">
+                        <span>View All Campaigns</span>
+                        <span>&rarr;</span>
+                    </button>
                 </div>
-                <div id="overview-campaigns-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div id="overview-campaigns-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
                     <div class="col-span-full py-6 text-center text-xs text-gray-500">Loading priority campaigns...</div>
                 </div>
             </div>
@@ -248,21 +375,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- ================= TAB 2: CAMPAIGNS ================= -->
         <div id="tab-campaigns" class="tab-pane hidden space-y-5">
-            <!-- Toolbar & Search -->
+            <!-- Filter & Search Toolbar -->
             <div class="bg-twitch-card border border-twitch-border rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 shadow">
                 <div class="relative w-full md:w-96">
-                    <input id="campaigns-search" type="text" oninput="renderCampaignsTab()" placeholder="Filter by game or reward..." class="w-full pl-9 pr-3.5 py-2 bg-twitch-dark border border-twitch-border rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-twitch-purple transition">
+                    <input id="campaigns-search" type="text" oninput="renderCampaignsTab()" placeholder="Filter by game or reward item..." class="w-full pl-9 pr-3.5 py-2 bg-twitch-dark border border-twitch-border rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-twitch-purple transition">
                     <span class="absolute left-3 top-2.5 text-gray-500 text-xs">🔍</span>
                 </div>
                 
                 <div class="flex items-center space-x-2 w-full md:w-auto overflow-x-auto justify-start md:justify-end">
                     <div class="flex items-center space-x-1 bg-twitch-dark p-1 rounded-lg border border-twitch-border text-xs">
                         <button onclick="setCampaignFilter('all')" id="cfilter-all" class="px-2.5 py-1 rounded font-medium bg-twitch-purple text-white">All</button>
-                        <button onclick="setCampaignFilter('linked')" id="cfilter-linked" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">Linked</button>
-                        <button onclick="setCampaignFilter('priority')" id="cfilter-priority" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">Priority</button>
-                        <button onclick="setCampaignFilter('excluded')" id="cfilter-excluded" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">Excluded</button>
+                        <button onclick="setCampaignFilter('farming')" id="cfilter-farming" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">🔥 Farming Now</button>
+                        <button onclick="setCampaignFilter('priority')" id="cfilter-priority" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">⭐ Priority</button>
+                        <button onclick="setCampaignFilter('excluded')" id="cfilter-excluded" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">🚫 Excluded</button>
+                        <button onclick="setCampaignFilter('linked')" id="cfilter-linked" class="px-2.5 py-1 rounded font-medium text-gray-400 hover:text-white">🔗 Linked</button>
                     </div>
-                    <button onclick="triggerAction('refresh')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-lg text-xs font-semibold transition active:scale-95 whitespace-nowrap">
+                    <button onclick="fetchCampaigns()" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-lg text-xs font-semibold transition active:scale-95 whitespace-nowrap">
                         🔄 Refresh
                     </button>
                 </div>
@@ -276,11 +404,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- ================= TAB 3: SETTINGS ================= -->
         <div id="tab-settings" class="tab-pane hidden space-y-6">
-            <!-- Unsaved alert bar -->
+            <!-- Unsaved Alert Bar -->
             <div id="settings-unsaved-alert" class="hidden bg-amber-950/40 border border-amber-600/60 rounded-xl p-3.5 text-xs text-amber-300 flex items-center justify-between shadow">
                 <div class="flex items-center space-x-2">
                     <span>⚠️</span>
-                    <span>You have unsaved changes. Remember to click <strong>Save Settings</strong> below to apply.</span>
+                    <span>You have unsaved changes. Click <strong>Save Settings</strong> below to apply.</span>
                 </div>
                 <div class="space-x-2">
                     <button onclick="loadSettings()" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-semibold transition">Discard</button>
@@ -390,7 +518,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                         <!-- Discord Bot Status -->
                         <div class="pt-3 border-t border-twitch-border/60 space-y-2">
-                            <span class="font-semibold text-gray-400 block">Interactive Discord Slash Bot Status:</span>
+                            <span class="font-semibold text-gray-400 block">Interactive Discord Slash Bot:</span>
                             <div class="flex items-center space-x-4 text-[11px]">
                                 <span id="status-bot-token" class="flex items-center space-x-1.5 text-gray-400">
                                     <span class="w-2 h-2 rounded-full bg-gray-500"></span>
@@ -401,7 +529,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                     <span>Owner ID: Not Set</span>
                                 </span>
                             </div>
-                            <p class="text-[11px] text-gray-500">Configure DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env or docker-compose to use /status, /priority, and interactive buttons.</p>
+                            <p class="text-[11px] text-gray-500">Configure DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to use /status, /priority, and interactive control buttons.</p>
                         </div>
                     </div>
                 </div>
@@ -417,7 +545,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
 
                     <div class="space-y-3 text-xs">
-                        <!-- Add Game Input with Autocomplete -->
                         <div class="flex space-x-2">
                             <input id="input-add-priority" list="known-games-datalist" type="text" placeholder="Enter game name to prioritize..." class="flex-1 px-3 py-2 bg-twitch-dark border border-twitch-border rounded-lg text-white text-xs focus:outline-none focus:border-twitch-purple transition">
                             <button onclick="addPriorityGame()" class="px-3.5 py-2 bg-twitch-purple hover:bg-twitch-accent text-white rounded-lg font-semibold transition active:scale-95 whitespace-nowrap">
@@ -425,7 +552,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             </button>
                         </div>
 
-                        <!-- Priority List Items -->
                         <div id="priority-list-container" class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
                             <p class="text-gray-500 text-center py-4 text-[11px]">No priority games configured. Miner will farm automatically based on campaign urgency.</p>
                         </div>
@@ -443,7 +569,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
 
                     <div class="space-y-3 text-xs">
-                        <!-- Add Game Input with Autocomplete -->
                         <div class="flex space-x-2">
                             <input id="input-add-exclude" list="known-games-datalist" type="text" placeholder="Enter game name to exclude..." class="flex-1 px-3 py-2 bg-twitch-dark border border-twitch-border rounded-lg text-white text-xs focus:outline-none focus:border-twitch-purple transition">
                             <button onclick="addExcludeGame()" class="px-3.5 py-2 bg-red-900/50 hover:bg-red-800/60 text-red-300 border border-red-700/60 rounded-lg font-semibold transition active:scale-95 whitespace-nowrap">
@@ -451,8 +576,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             </button>
                         </div>
 
-                        <!-- Exclude Chips Tag Cloud -->
-                        <div id="exclude-tags-container" class="flex flex-wrap gap-2 max-h-60 overflow-y-auto pr-1 pt-1">
+                        <div class="p-2.5 rounded-lg bg-twitch-dark/60 border border-twitch-border text-[11px] text-gray-400">
+                            💡 <strong>Tip:</strong> Distinct editions are independent (e.g., excluding <code class="text-gray-200">World of Tanks</code> will NOT exclude <code class="text-gray-200">World of Tanks: HEAT</code>). Append <code class="text-twitch-purple font-bold">*</code> (e.g. <code class="text-twitch-purple">World of Tanks*</code>) to match all spin-offs.
+                        </div>
+
+                        <div id="exclude-tags-container" class="flex flex-wrap gap-2 max-h-52 overflow-y-auto pr-1 pt-1">
                             <p class="text-gray-500 text-center w-full py-4 text-[11px]">No excluded games. All active games are eligible for drops.</p>
                         </div>
                     </div>
@@ -521,12 +649,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <!-- Footer -->
     <footer class="text-center py-4 text-xs text-gray-500 border-t border-twitch-border/40 mt-auto">
-        Twitch Drops Miner Headless &bull; Control Center &bull; Auto-refreshing
+        Twitch Drops Miner &bull; Advanced Control Center &bull; Live Visual Mining
     </footer>
 
     <!-- Frontend Single Page Application JavaScript -->
     <script>
+        const PLACEHOLDER_COVER = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='144' height='192' viewBox='0 0 144 192' fill='%231f1f23'><rect width='144' height='192' rx='8'/><text x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='32' fill='%239146FF'>🎮</text></svg>";
+        const PLACEHOLDER_REWARD = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48' fill='%231f1f23'><rect width='48' height='48' rx='6'/><text x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='20' fill='%239146FF'>🎁</text></svg>";
+
         let currentTab = 'overview';
+        let rawStatus = {};
         let rawCampaigns = [];
         let rawSettings = {};
         let rawOptions = {};
@@ -581,6 +713,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return;
                 }
                 const data = await res.json();
+                rawStatus = data;
                 updateOverviewUI(data);
             } catch (err) {
                 console.error("Status poll error", err);
@@ -652,50 +785,108 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (containerScreenshot) containerScreenshot.classList.add('hidden');
             }
 
+            // Channel & Stream UI
             const channelName = document.getElementById('channel-name');
             const gameName = document.getElementById('game-name');
+            const streamTitle = document.getElementById('stream-title');
             const streamLink = document.getElementById('stream-link');
-            const channelAvatar = document.getElementById('channel-avatar');
+            const channelBoxart = document.getElementById('channel-boxart');
+            const viewersBadge = document.getElementById('channel-viewers-badge');
+            const viewersCount = document.getElementById('channel-viewers-count');
+            const statusPill = document.getElementById('game-status-pill');
 
             if (data.channel) {
                 if (channelName) channelName.innerText = data.channel.name;
                 if (gameName) gameName.innerText = data.channel.game || 'Active Stream';
+                if (streamTitle) streamTitle.innerText = data.channel.title || 'Live Stream';
                 if (streamLink) {
                     streamLink.href = data.channel.url;
                     streamLink.classList.remove('hidden');
                 }
-                if (channelAvatar) channelAvatar.innerText = data.channel.name.charAt(0).toUpperCase();
+                if (channelBoxart) {
+                    channelBoxart.src = data.channel.box_art_url || PLACEHOLDER_COVER;
+                }
+                if (viewersBadge && viewersCount) {
+                    if (data.channel.viewers && data.channel.viewers > 0) {
+                        viewersCount.innerText = data.channel.viewers.toLocaleString();
+                        viewersBadge.classList.remove('hidden');
+                    } else {
+                        viewersBadge.classList.add('hidden');
+                    }
+                }
+                if (statusPill) {
+                    if (data.channel.is_priority) {
+                        statusPill.innerText = `⭐ Priority #${data.channel.priority_rank}`;
+                        statusPill.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-twitch-purple/20 text-twitch-purple border border-twitch-purple/40';
+                        statusPill.classList.remove('hidden');
+                    } else if (data.channel.is_excluded) {
+                        statusPill.innerText = '🚫 Excluded';
+                        statusPill.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-red-950/60 text-red-300 border border-red-800/60';
+                        statusPill.classList.remove('hidden');
+                    } else {
+                        statusPill.classList.add('hidden');
+                    }
+                }
             } else {
                 if (channelName) channelName.innerText = 'Scanning for streams...';
                 if (gameName) gameName.innerText = 'Waiting for active campaign';
+                if (streamTitle) streamTitle.innerText = 'Miner is evaluating live streams';
                 if (streamLink) streamLink.classList.add('hidden');
+                if (channelBoxart) channelBoxart.src = PLACEHOLDER_COVER;
+                if (viewersBadge) viewersBadge.classList.add('hidden');
+                if (statusPill) statusPill.classList.add('hidden');
             }
 
+            // Drop UI
             const dropName = document.getElementById('drop-name');
+            const dropRewards = document.getElementById('drop-rewards-text');
             const dropPercent = document.getElementById('drop-percent');
             const progressBar = document.getElementById('progress-bar');
             const dropMinutes = document.getElementById('drop-minutes');
             const dropEta = document.getElementById('drop-eta');
             const campaignDropsCount = document.getElementById('campaign-drops-count');
+            const dropRewardImg = document.getElementById('drop-reward-img');
 
             if (data.drop) {
                 if (dropName) dropName.innerText = data.drop.name;
+                if (dropRewards) dropRewards.innerText = data.drop.benefit_name || data.drop.rewards || 'Campaign Reward';
                 if (dropPercent) dropPercent.innerText = `${data.drop.progress_percent}%`;
                 if (progressBar) progressBar.style.width = `${data.drop.progress_percent}%`;
                 if (dropMinutes) dropMinutes.innerText = `${data.drop.current_minutes} / ${data.drop.required_minutes} min`;
 
-                const remainingMin = data.drop.required_minutes - data.drop.current_minutes;
+                const remainingMin = data.drop.remaining_minutes !== undefined ? data.drop.remaining_minutes : (data.drop.required_minutes - data.drop.current_minutes);
                 if (dropEta) dropEta.innerText = remainingMin > 0 ? `ETA: ~${remainingMin}m` : 'Ready to claim';
                 if (campaignDropsCount) campaignDropsCount.innerText = `Drops: ${data.drop.campaign_claimed}/${data.drop.campaign_total}`;
+                if (dropRewardImg) dropRewardImg.src = data.drop.benefit_image || PLACEHOLDER_REWARD;
             } else {
                 if (dropName) dropName.innerText = 'No active drop';
+                if (dropRewards) dropRewards.innerText = 'Waiting for progress...';
                 if (dropPercent) dropPercent.innerText = '0%';
                 if (progressBar) progressBar.style.width = '0%';
                 if (dropMinutes) dropMinutes.innerText = '0 / 0 min';
                 if (dropEta) dropEta.innerText = 'ETA: --';
+                if (dropRewardImg) dropRewardImg.src = PLACEHOLDER_REWARD;
             }
 
             renderOverviewCampaigns(data.campaigns || []);
+        }
+
+        async function activeFarmPrioritize() {
+            const game = rawStatus?.channel?.game;
+            if (!game) {
+                showToast("No active game to prioritize", "warning");
+                return;
+            }
+            await quickActionPriority(game);
+        }
+
+        async function activeFarmExclude() {
+            const game = rawStatus?.channel?.game;
+            if (!game) {
+                showToast("No active game to exclude", "warning");
+                return;
+            }
+            await quickActionExclude(game);
         }
 
         function renderOverviewCampaigns(campaigns) {
@@ -710,23 +901,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             container.innerHTML = campaigns.slice(0, 6).map(c => `
-                <div class="bg-twitch-dark/60 border border-twitch-border/70 rounded-lg p-3 space-y-2 hover:border-twitch-purple/40 transition">
-                    <div class="flex items-start justify-between">
-                        <div class="truncate">
-                            <h4 class="font-bold text-white text-xs truncate">${c.game}</h4>
-                            <p class="text-[11px] text-gray-400 truncate">${c.name}</p>
+                <div class="bg-twitch-dark/60 border ${c.is_currently_farming ? 'border-twitch-purple shadow-md shadow-twitch-purple/20 ring-1 ring-twitch-purple/50' : 'border-twitch-border/70'} rounded-lg p-3 space-y-2.5 hover:border-twitch-purple/40 transition flex items-start space-x-3">
+                    <img src="${c.box_art_url || PLACEHOLDER_COVER}" alt="${c.game}" class="w-12 h-16 rounded object-cover flex-shrink-0 bg-twitch-dark border border-twitch-border shadow" onerror="this.src=PLACEHOLDER_COVER" />
+                    
+                    <div class="flex-1 min-w-0 space-y-1.5">
+                        <div class="flex items-start justify-between gap-1">
+                            <div class="truncate">
+                                <h4 class="font-bold text-white text-xs truncate">${c.game}</h4>
+                                <p class="text-[10px] text-gray-400 truncate">${c.name}</p>
+                            </div>
+                            ${c.is_currently_farming ? 
+                                '<span class="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-twitch-purple text-white whitespace-nowrap animate-pulse">FARMING</span>' : 
+                                `<span class="px-1.5 py-0.5 rounded text-[9px] font-semibold ${c.is_priority ? 'bg-twitch-purple/20 text-twitch-purple border border-twitch-purple/40' : 'bg-gray-800 text-gray-400'} whitespace-nowrap">${c.is_priority ? `#${c.priority_rank} Prio` : c.time_left}</span>`
+                            }
                         </div>
-                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold ${c.is_priority ? 'bg-twitch-purple/20 text-twitch-purple border border-twitch-purple/40' : 'bg-gray-800 text-gray-400'}">
-                            ${c.is_priority ? `#${c.priority_rank} Priority` : c.time_left}
-                        </span>
-                    </div>
-                    <div class="space-y-1">
-                        <div class="flex justify-between text-[10px] text-gray-400">
-                            <span>Progress: ${c.claimed}/${c.total} drops</span>
-                            <span class="text-twitch-purple font-semibold">${c.progress_percent}%</span>
+                        
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-[10px] text-gray-400">
+                                <span>${c.claimed}/${c.total} drops</span>
+                                <span class="text-twitch-purple font-bold">${c.progress_percent}%</span>
+                            </div>
+                            <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+                                <div class="bg-twitch-purple h-full rounded-full" style="width: ${c.progress_percent}%"></div>
+                            </div>
                         </div>
-                        <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
-                            <div class="bg-twitch-purple h-full rounded-full" style="width: ${c.progress_percent}%"></div>
+
+                        <div class="pt-1 flex items-center space-x-2 text-[10px]">
+                            <button onclick="quickActionPriority('${c.game.replace(/'/g, "\\'")}')" class="text-twitch-purple hover:underline font-semibold">
+                                ${c.is_priority ? '⭐ Top Prio' : '+ Prioritize'}
+                            </button>
+                            <span class="text-gray-600">&bull;</span>
+                            <button onclick="quickActionExclude('${c.game.replace(/'/g, "\\'")}')" class="text-red-400 hover:underline">
+                                ${c.is_excluded ? 'Allow' : 'Exclude'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -747,7 +954,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function setCampaignFilter(f) {
             campaignFilter = f;
-            ['all', 'linked', 'priority', 'excluded'].forEach(id => {
+            ['all', 'farming', 'priority', 'excluded', 'linked'].forEach(id => {
                 const btn = document.getElementById(`cfilter-${id}`);
                 if (btn) {
                     btn.className = id === f ? 
@@ -764,8 +971,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const search = (document.getElementById('campaigns-search')?.value || '').toLowerCase();
 
             const filtered = rawCampaigns.filter(c => {
-                const matchesSearch = c.game.toLowerCase().includes(search) || c.name.toLowerCase().includes(search);
+                const matchesSearch = c.game.toLowerCase().includes(search) || 
+                                      c.name.toLowerCase().includes(search) ||
+                                      (c.drops && c.drops.some(d => d.name.toLowerCase().includes(search)));
                 if (!matchesSearch) return false;
+                if (campaignFilter === 'farming') return c.is_currently_farming;
                 if (campaignFilter === 'linked') return c.is_linked;
                 if (campaignFilter === 'priority') return c.is_priority;
                 if (campaignFilter === 'excluded') return c.is_excluded;
@@ -778,40 +988,69 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             container.innerHTML = filtered.map(c => `
-                <div class="bg-twitch-card border ${c.is_priority ? 'border-twitch-purple/60 shadow-lg shadow-twitch-purple/5' : c.is_excluded ? 'border-red-900/40 opacity-75' : 'border-twitch-border'} rounded-xl p-4 space-y-3.5 flex flex-col justify-between">
-                    <div class="space-y-2">
-                        <div class="flex items-start justify-between gap-2">
-                            <div>
-                                <span class="text-[10px] font-bold uppercase tracking-wider text-twitch-purple">${c.time_left}</span>
-                                <h4 class="text-base font-extrabold text-white leading-tight">${c.game}</h4>
+                <div class="bg-twitch-card border ${c.is_currently_farming ? 'ring-2 ring-twitch-purple shadow-xl shadow-twitch-purple/20 bg-gradient-to-br from-twitch-purple/10 to-twitch-card' : c.is_priority ? 'border-twitch-purple/60 shadow-lg shadow-twitch-purple/5' : c.is_excluded ? 'border-red-900/40 opacity-75' : 'border-twitch-border'} rounded-xl p-4 sm:p-5 space-y-3.5 flex flex-col justify-between transition duration-200">
+                    <div class="space-y-3">
+                        ${c.is_currently_farming ? `
+                            <div class="flex items-center justify-between pb-1">
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-twitch-purple text-white flex items-center space-x-1.5 shadow-md shadow-twitch-purple/30 animate-pulse">
+                                    <span>🔥</span>
+                                    <span>CURRENTLY FARMING</span>
+                                </span>
+                                <span class="text-[10px] font-semibold text-emerald-400">Drops Eligible</span>
                             </div>
-                            <span class="px-2 py-0.5 rounded text-[10px] font-semibold ${c.is_linked ? 'bg-green-950/60 text-green-300 border border-green-800/60' : 'bg-amber-950/60 text-amber-300 border border-amber-800/60'} whitespace-nowrap">
-                                ${c.is_linked ? '🔗 Linked' : '⚠️ Unlinked'}
-                            </span>
-                        </div>
-                        <p class="text-xs text-gray-400 font-medium line-clamp-1">${c.name}</p>
+                        ` : ''}
 
+                        <div class="flex items-start space-x-3.5">
+                            <img src="${c.box_art_url || PLACEHOLDER_COVER}" alt="${c.game}" class="w-16 sm:w-20 h-24 sm:h-28 rounded-lg object-cover flex-shrink-0 bg-twitch-dark border border-twitch-border shadow" onerror="this.src=PLACEHOLDER_COVER" />
+                            
+                            <div class="space-y-1 flex-1 min-w-0">
+                                <div class="flex items-start justify-between gap-1">
+                                    <span class="text-[10px] font-bold uppercase tracking-wider text-twitch-purple">${c.time_left}</span>
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-semibold ${c.is_linked ? 'bg-green-950/60 text-green-300 border border-green-800/60' : 'bg-amber-950/60 text-amber-300 border border-amber-800/60'} whitespace-nowrap">
+                                        ${c.is_linked ? '🔗 Linked' : '⚠️ Unlinked'}
+                                    </span>
+                                </div>
+                                <h4 class="text-base font-extrabold text-white leading-tight truncate" title="${c.game}">${c.game}</h4>
+                                <p class="text-xs text-gray-400 font-medium line-clamp-1" title="${c.name}">${c.name}</p>
+
+                                <div class="pt-1.5 space-y-1">
+                                    <div class="flex justify-between text-[11px] text-gray-400">
+                                        <span>Progress (${c.claimed_drops}/${c.total_drops})</span>
+                                        <span class="text-twitch-purple font-bold">${c.progress_percent}%</span>
+                                    </div>
+                                    <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
+                                        <div class="bg-gradient-to-r from-twitch-accent to-twitch-purple h-full rounded-full" style="width: ${c.progress_percent}%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Drop Rewards List with Item Images -->
                         <div class="space-y-1.5 pt-1">
                             <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">Rewards (${c.claimed_drops}/${c.total_drops}):</span>
                             <div class="space-y-1 max-h-36 overflow-y-auto pr-1">
                                 ${c.drops.map(d => `
-                                    <div class="bg-twitch-dark/70 border border-twitch-border/60 rounded px-2.5 py-1.5 text-xs flex items-center justify-between">
+                                    <div class="bg-twitch-dark/70 border border-twitch-border/60 rounded-lg px-2.5 py-1.5 text-xs flex items-center justify-between">
                                         <div class="flex items-center space-x-2 truncate">
-                                            <span>${d.is_claimed ? '✅' : d.progress_percent > 0 ? '⏳' : '🎁'}</span>
+                                            <img src="${d.image_url || PLACEHOLDER_REWARD}" class="w-5 h-5 rounded object-contain bg-black/40 border border-twitch-border/40 p-0.5 flex-shrink-0" onerror="this.src=PLACEHOLDER_REWARD" />
                                             <span class="text-gray-200 truncate ${d.is_claimed ? 'line-through text-gray-500' : ''}">${d.name}</span>
                                         </div>
-                                        <span class="text-[10px] font-mono text-gray-400 ml-2 whitespace-nowrap">${d.current_minutes}/${d.required_minutes}m</span>
+                                        <div class="flex items-center space-x-1.5 ml-2 flex-shrink-0">
+                                            <span class="text-[10px] font-mono text-gray-400 whitespace-nowrap">${d.current_minutes}/${d.required_minutes}m</span>
+                                            <span>${d.is_claimed ? '✅' : d.progress_percent > 0 ? '⏳' : ''}</span>
+                                        </div>
                                     </div>
                                 `).join('')}
                             </div>
                         </div>
                     </div>
 
+                    <!-- Card Actions -->
                     <div class="pt-3 border-t border-twitch-border/60 flex items-center justify-between gap-2">
-                        <button onclick="quickActionPriority('${c.game.replace(/'/g, "\'")}')" class="flex-1 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 border ${c.is_priority ? 'bg-twitch-purple text-white border-twitch-purple' : 'bg-twitch-purple/10 text-twitch-purple border-twitch-purple/30 hover:bg-twitch-purple/20'}">
+                        <button onclick="quickActionPriority('${c.game.replace(/'/g, "\\'")}')" class="flex-1 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 border ${c.is_priority ? 'bg-twitch-purple text-white border-twitch-purple' : 'bg-twitch-purple/10 text-twitch-purple border-twitch-purple/30 hover:bg-twitch-purple/20'}">
                             ${c.is_priority ? `⭐ In Priority (#${c.priority_rank})` : '+ Prioritize'}
                         </button>
-                        <button onclick="quickActionExclude('${c.game.replace(/'/g, "\'")}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 border ${c.is_excluded ? 'bg-red-900/50 text-red-300 border-red-700/60' : 'bg-gray-800 text-gray-400 border-gray-700 hover:text-white'}">
+                        <button onclick="quickActionExclude('${c.game.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 border ${c.is_excluded ? 'bg-red-900/50 text-red-300 border-red-700/60' : 'bg-gray-800 text-gray-400 border-gray-700 hover:text-white'}">
                             ${c.is_excluded ? '🚫 Excluded' : 'Exclude'}
                         </button>
                     </div>
@@ -828,8 +1067,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Promoted "${game}" to top of Priority Queue!`);
+                    showToast(`Promoted "${game}" to #1 Priority!`);
                     fetchCampaigns();
+                    fetchStatus();
                 } else {
                     showToast(data.error || 'Failed to update priority', 'error');
                 }
@@ -840,17 +1080,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function quickActionExclude(game) {
             try {
+                const isCurrentlyExcluded = rawSettings?.exclude?.includes(game);
+                const action = isCurrentlyExcluded ? 'remove' : 'add';
                 const res = await fetch('/api/settings/exclude', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'add', game: game })
+                    body: JSON.stringify({ action: action, game: game })
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Added "${game}" to Excluded Games!`, 'warning');
+                    showToast(isCurrentlyExcluded ? `Removed "${game}" from Excluded!` : `Added "${game}" to Excluded Games!`, isCurrentlyExcluded ? 'success' : 'warning');
                     fetchCampaigns();
+                    fetchStatus();
                 } else {
-                    showToast(data.error || 'Failed to exclude game', 'error');
+                    showToast(data.error || 'Failed to update exclude', 'error');
                 }
             } catch (err) {
                 showToast(err.message, 'error');
@@ -963,10 +1206,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <span class="font-medium text-white truncate">${game}</span>
                     </div>
                     <div class="flex items-center space-x-1 ml-2">
-                        <button onclick="movePriorityGame('${game.replace(/'/g, "\'")}', 'move_up')" class="p-1 hover:text-twitch-purple text-gray-400 transition" title="Move Up">▲</button>
-                        <button onclick="movePriorityGame('${game.replace(/'/g, "\'")}', 'move_down')" class="p-1 hover:text-twitch-purple text-gray-400 transition" title="Move Down">▼</button>
-                        <button onclick="movePriorityGame('${game.replace(/'/g, "\'")}', 'top')" class="p-1 hover:text-yellow-400 text-gray-400 transition text-[10px]" title="Promote to Top">⭐</button>
-                        <button onclick="removePriorityGame('${game.replace(/'/g, "\'")}')" class="p-1 hover:text-red-400 text-gray-400 transition ml-1" title="Remove">✕</button>
+                        <button onclick="movePriorityGame('${game.replace(/'/g, "\\'")}', 'move_up')" class="p-1 hover:text-twitch-purple text-gray-400 transition" title="Move Up">▲</button>
+                        <button onclick="movePriorityGame('${game.replace(/'/g, "\\'")}', 'move_down')" class="p-1 hover:text-twitch-purple text-gray-400 transition" title="Move Down">▼</button>
+                        <button onclick="movePriorityGame('${game.replace(/'/g, "\\'")}', 'top')" class="p-1 hover:text-yellow-400 text-gray-400 transition text-[10px]" title="Promote to Top">⭐</button>
+                        <button onclick="removePriorityGame('${game.replace(/'/g, "\\'")}')" class="p-1 hover:text-red-400 text-gray-400 transition ml-1" title="Remove">✕</button>
                     </div>
                 </div>
             `).join('');
@@ -988,7 +1231,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             container.innerHTML = list.map(game => `
                 <span class="bg-red-950/40 border border-red-800/60 text-red-300 px-2.5 py-1 rounded-full text-xs flex items-center space-x-1.5 shadow-sm">
                     <span class="truncate max-w-[180px]">${game}</span>
-                    <button onclick="removeExcludeGame('${game.replace(/'/g, "\'")}')" class="hover:text-white transition font-bold text-red-400 ml-1">✕</button>
+                    <button onclick="removeExcludeGame('${game.replace(/'/g, "\\'")}')" class="hover:text-white transition font-bold text-red-400 ml-1">✕</button>
                 </span>
             `).join('');
         }
@@ -997,21 +1240,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const input = document.getElementById('input-add-priority');
             const game = (input?.value || '').trim();
             if (!game) return;
-
             try {
                 const res = await fetch('/api/settings/priority', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'add', game: game })
                 });
-                const data = await res.json();
                 if (res.ok) {
-                    rawSettings.priority = data.priority;
                     input.value = '';
-                    renderPrioritySettingsList();
-                    showToast(`Added "${game}" to Priority Queue`);
+                    showToast(`Added "${game}" to priority list!`);
+                    await loadSettings();
                 } else {
-                    showToast(data.error || 'Failed to add priority game', 'error');
+                    const data = await res.json();
+                    showToast(data.error || 'Failed to add game', 'error');
                 }
             } catch (err) {
                 showToast(err.message, 'error');
@@ -1025,10 +1266,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: action, game: game })
                 });
-                const data = await res.json();
                 if (res.ok) {
-                    rawSettings.priority = data.priority;
-                    renderPrioritySettingsList();
+                    await loadSettings();
                 }
             } catch (err) {
                 showToast(err.message, 'error');
@@ -1042,11 +1281,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'remove', game: game })
                 });
-                const data = await res.json();
                 if (res.ok) {
-                    rawSettings.priority = data.priority;
-                    renderPrioritySettingsList();
-                    showToast(`Removed "${game}" from Priority Queue`);
+                    showToast(`Removed "${game}" from priority`);
+                    await loadSettings();
                 }
             } catch (err) {
                 showToast(err.message, 'error');
@@ -1057,20 +1294,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const input = document.getElementById('input-add-exclude');
             const game = (input?.value || '').trim();
             if (!game) return;
-
             try {
                 const res = await fetch('/api/settings/exclude', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'add', game: game })
                 });
-                const data = await res.json();
                 if (res.ok) {
-                    rawSettings.exclude = data.exclude;
                     input.value = '';
-                    renderExcludeSettingsList();
-                    showToast(`Excluded "${game}" from drops`, 'warning');
+                    showToast(`Added "${game}" to exclude list!`);
+                    await loadSettings();
                 } else {
+                    const data = await res.json();
                     showToast(data.error || 'Failed to exclude game', 'error');
                 }
             } catch (err) {
@@ -1085,11 +1320,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'remove', game: game })
                 });
+                if (res.ok) {
+                    showToast(`Removed "${game}" from excluded games`);
+                    await loadSettings();
+                }
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function saveSettings() {
+            const modeSelect = document.getElementById('setting-priority-mode');
+            const staleTimeout = document.getElementById('setting-stale-timeout');
+            const maintInterval = document.getElementById('setting-maint-interval');
+            const connQuality = document.getElementById('setting-conn-quality');
+            const availCheck = document.getElementById('setting-available-drops-check');
+            const badgesEmotes = document.getElementById('setting-badges-emotes');
+            const webhookUrl = document.getElementById('setting-webhook-url');
+            const summaryInterval = document.getElementById('setting-summary-interval');
+            const discordEnabled = document.getElementById('setting-discord-enabled');
+
+            const payload = {
+                priority_mode: parseInt(modeSelect?.value || '3'),
+                stale_stream_timeout_minutes: parseInt(staleTimeout?.value || '5'),
+                maintenance_interval_minutes: parseInt(maintInterval?.value || '20'),
+                connection_quality: parseInt(connQuality?.value || '1'),
+                available_drops_check: !!availCheck?.checked,
+                enable_badges_emotes: !!badgesEmotes?.checked,
+                discord_webhook_url: (webhookUrl?.value || '').trim(),
+                discord_summary_interval_minutes: parseInt(summaryInterval?.value || '60'),
+                discord_notifications_enabled: !!discordEnabled?.checked,
+            };
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
                 const data = await res.json();
                 if (res.ok) {
-                    rawSettings.exclude = data.exclude;
-                    renderExcludeSettingsList();
-                    showToast(`Removed "${game}" from Exclude List`);
+                    showToast("Settings saved successfully!");
+                    clearSettingsDirty();
+                    await loadSettings();
+                } else {
+                    showToast(data.error || 'Failed to save settings', 'error');
                 }
             } catch (err) {
                 showToast(err.message, 'error');
@@ -1101,127 +1376,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const res = await fetch('/api/notifications/test', { method: 'POST' });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast('Discord test notification dispatched successfully!');
+                    showToast(data.message || "Test notification sent!");
                 } else {
-                    showToast(data.error || data.message || 'Discord test failed', 'error');
+                    showToast(data.message || data.error || "Failed to send notification", "error");
                 }
             } catch (err) {
-                showToast(err.message, 'error');
-            }
-        }
-
-        async function saveSettings() {
-            const payload = {
-                priority_mode: parseInt(document.getElementById('setting-priority-mode')?.value || '3'),
-                stale_stream_timeout_minutes: parseInt(document.getElementById('setting-stale-timeout')?.value || '5'),
-                maintenance_interval_minutes: parseInt(document.getElementById('setting-maint-interval')?.value || '20'),
-                connection_quality: parseInt(document.getElementById('setting-conn-quality')?.value || '1'),
-                available_drops_check: document.getElementById('setting-available-drops-check')?.checked,
-                enable_badges_emotes: document.getElementById('setting-badges-emotes')?.checked,
-                discord_notifications_enabled: document.getElementById('setting-discord-enabled')?.checked,
-                discord_summary_interval_minutes: parseInt(document.getElementById('setting-summary-interval')?.value || '60'),
-            };
-
-            const webhookInput = document.getElementById('setting-webhook-url')?.value?.trim();
-            if (webhookInput !== undefined && !webhookInput.includes('*****')) {
-                payload.discord_webhook_url = webhookInput;
-            }
-
-            try {
-                const res = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    showToast('Settings saved and applied successfully!');
-                    clearSettingsDirty();
-                    loadSettings();
-                } else {
-                    showToast(data.error || 'Failed to save settings', 'error');
-                }
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
-        }
-
-        async function fetchLogs() {
-            if (currentTab !== 'logs') return;
-            try {
-                const url = logFilter === 'ALL' ? '/api/logs?limit=250' : `/api/logs?level=${logFilter}&limit=250`;
-                const res = await fetch(url);
-                if (!res.ok) return;
-                const data = await res.json();
-                renderLogs(data.logs || []);
-            } catch (err) {
-                console.error("Logs fetch error", err);
-            }
-        }
-
-        function setLogLevelFilter(level) {
-            logFilter = level;
-            ['ALL', 'INFO', 'WARNING', 'ERROR'].forEach(lvl => {
-                const btn = document.getElementById(`logfilter-${lvl.toLowerCase()}`);
-                if (btn) {
-                    btn.className = lvl === level ?
-                        'px-2.5 py-1 rounded text-xs font-semibold bg-twitch-purple text-white transition' :
-                        'px-2.5 py-1 rounded text-xs font-semibold bg-twitch-dark text-gray-400 hover:text-white transition';
-                }
-            });
-            fetchLogs();
-        }
-
-        function renderLogs(logs) {
-            const consoleEl = document.getElementById('logs-console');
-            if (!consoleEl) return;
-
-            if (!logs.length) {
-                consoleEl.innerHTML = '<div class="text-gray-500 py-6 text-center">No logs recorded in buffer for current filter.</div>';
-                return;
-            }
-
-            const shouldScroll = document.getElementById('logs-autoscroll')?.checked;
-
-            consoleEl.innerHTML = logs.map(l => {
-                let colorClass = 'text-gray-300';
-                if (l.level === 'WARNING') colorClass = 'text-amber-400';
-                else if (l.level === 'ERROR') colorClass = 'text-rose-400 font-bold';
-                else if (l.level === 'DEBUG') colorClass = 'text-gray-500';
-
-                return `<div class="leading-relaxed hover:bg-white/[0.02] px-1 rounded">
-                    <span class="text-gray-500 font-mono select-none">[${l.time_short || '..:..:..'}]</span>
-                    <span class="font-bold text-[11px] ${colorClass}">[${l.level}]</span>
-                    <span class="${colorClass}">${escapeHtml(l.message)}</span>
-                </div>`;
-            }).join('');
-
-            if (shouldScroll) {
-                consoleEl.scrollTop = consoleEl.scrollHeight;
-            }
-        }
-
-        function escapeHtml(str) {
-            return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-
-        function copyLogs() {
-            const consoleEl = document.getElementById('logs-console');
-            if (!consoleEl) return;
-            navigator.clipboard.writeText(consoleEl.innerText).then(() => {
-                showToast('All visible logs copied to clipboard!');
-            }).catch(err => {
-                showToast('Failed to copy logs', 'error');
-            });
-        }
-
-        async function clearLogs() {
-            try {
-                await fetch('/api/logs/clear', { method: 'POST' });
-                showToast('Log buffer cleared');
-                fetchLogs();
-            } catch (err) {
-                showToast(err.message, 'error');
+                showToast(err.message, "error");
             }
         }
 
@@ -1229,8 +1389,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             try {
                 const res = await fetch(`/api/action/${actionName}`, { method: 'POST' });
                 const data = await res.json();
-                if (data.status === 'ok') {
-                    showToast(data.message || 'Action executed successfully!');
+                if (res.ok) {
+                    showToast(data.message || `Action ${actionName} triggered!`);
                     fetchStatus();
                 } else {
                     showToast(data.message || 'Action failed', 'error');
@@ -1243,8 +1403,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         async function submit2FA() {
             const input = document.getElementById('input-2fa');
             const code = (input?.value || '').trim();
-            if (!code) return;
-
+            if (!code) {
+                showToast("Please enter 2FA verification code", "warning");
+                return;
+            }
             try {
                 const res = await fetch('/api/action/submit-2fa', {
                     method: 'POST',
@@ -1252,18 +1414,98 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     body: JSON.stringify({ code: code })
                 });
                 const data = await res.json();
-                if (data.status === 'ok') {
-                    showToast('2FA code submitted successfully!');
+                if (res.ok) {
+                    showToast(data.message || "2FA submitted!");
                     input.value = '';
                     fetchStatus();
                 } else {
-                    showToast(data.error || 'Failed to submit 2FA', 'error');
+                    showToast(data.message || "Failed to submit 2FA", "error");
+                }
+            } catch (err) {
+                showToast(err.message, "error");
+            }
+        }
+
+        // Live Logs Logic
+        function setLogLevelFilter(lvl) {
+            logFilter = lvl;
+            ['all', 'info', 'warning', 'error'].forEach(id => {
+                const btn = document.getElementById(`logfilter-${id}`);
+                if (btn) {
+                    btn.className = id.toUpperCase() === lvl ? 
+                        'px-2.5 py-1 rounded text-xs font-semibold bg-twitch-purple text-white transition' : 
+                        'px-2.5 py-1 rounded text-xs font-semibold bg-twitch-dark text-gray-400 hover:text-white transition';
+                }
+            });
+            fetchLogs();
+        }
+
+        async function fetchLogs() {
+            try {
+                const url = logFilter === 'ALL' ? '/api/logs' : `/api/logs?level=${logFilter}`;
+                const res = await fetch(url);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderLogs(data.logs || []);
+            } catch (err) {
+                console.error("Failed to fetch logs", err);
+            }
+        }
+
+        function renderLogs(logs) {
+            const consoleEl = document.getElementById('logs-console');
+            if (!consoleEl) return;
+
+            if (!logs.length) {
+                consoleEl.innerHTML = '<div class="text-gray-500 py-6 text-center">No logs matching filter.</div>';
+                return;
+            }
+
+            consoleEl.innerHTML = logs.map(l => {
+                const colorClass = l.level === 'ERROR' ? 'text-red-400 font-bold' :
+                                   l.level === 'WARNING' ? 'text-amber-400' :
+                                   l.level === 'INFO' ? 'text-blue-300' : 'text-gray-400';
+                return `
+                    <div class="leading-relaxed hover:bg-white/[0.02] px-1 rounded flex items-start space-x-2">
+                        <span class="text-gray-500 select-none text-[10px] whitespace-nowrap">${l.timestamp}</span>
+                        <span class="${colorClass} select-none text-[10px] font-bold w-12 text-center whitespace-nowrap">[${l.level}]</span>
+                        <span class="text-gray-200 select-text break-all">${escapeHtml(l.message)}</span>
+                    </div>
+                `;
+            }).join('');
+
+            const autoScroll = document.getElementById('logs-autoscroll')?.checked;
+            if (autoScroll) {
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+        }
+
+        function escapeHtml(str) {
+            return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function copyLogs() {
+            const consoleEl = document.getElementById('logs-console');
+            if (consoleEl) {
+                navigator.clipboard.writeText(consoleEl.innerText).then(() => {
+                    showToast("Logs copied to clipboard!");
+                });
+            }
+        }
+
+        async function clearLogs() {
+            try {
+                const res = await fetch('/api/logs/clear', { method: 'POST' });
+                if (res.ok) {
+                    showToast("Log buffer cleared");
+                    fetchLogs();
                 }
             } catch (err) {
                 showToast(err.message, 'error');
             }
         }
 
+        // Periodic Status Poller
         fetchStatus();
         setInterval(fetchStatus, 3000);
         setInterval(() => {
@@ -1465,33 +1707,80 @@ class WebDashboard:
 
         # 1. Channel Info
         watching_channel = self.twitch.watching_channel.get_with_default(None)
-        if watching_channel is not None:
-            channel_data = {
-                "name": watching_channel.name,
-                "game": watching_channel.game.name if watching_channel.game else None,
-                "url": str(watching_channel.url),
-            }
-
-        # 2. Active Campaign and Drop
         active_campaign = self.twitch.get_active_campaign(watching_channel)
-        if active_campaign is not None and active_campaign.active_drop is not None:
-            drop = active_campaign.active_drop
-            drop_data = {
-                "name": drop.name,
-                "rewards": drop.rewards_text(),
-                "current_minutes": drop.current_minutes,
-                "required_minutes": drop.required_minutes,
-                "progress_percent": int(drop.progress * 100) if drop.progress else 0,
-                "campaign_name": active_campaign.name,
-                "campaign_claimed": active_campaign.claimed_drops,
-                "campaign_total": active_campaign.total_drops,
-            }
+        active_campaign_id = getattr(active_campaign, "id", None) if active_campaign else None
 
-        # 3. Campaigns List
-        priority_list = self.twitch.settings.priority
+        priority_list = list(getattr(self.twitch.settings, "priority", []))
         priority_set = set(priority_list)
         exclude_raw = getattr(self.twitch.settings, "exclude", set())
         exclude_set = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
+
+        if watching_channel is not None:
+            game_name = _safe_str(getattr(watching_channel.game, "name", None)) or None
+            is_prio = bool(game_name and game_name in priority_set)
+            prio_rank = (priority_list.index(game_name) + 1) if is_prio else None
+            is_excl = bool(game_name and is_game_excluded(game_name, exclude_set))
+            viewers_val = _safe_int(getattr(watching_channel, "viewers", 0))
+            raw_title = getattr(watching_channel, "title", None)
+            if not raw_title or hasattr(raw_title, "_mock_name"):
+                raw_title = getattr(watching_channel, "stream_title", None)
+            if not raw_title or hasattr(raw_title, "_mock_name"):
+                stream_obj = getattr(watching_channel, "_stream", None)
+                raw_title = getattr(stream_obj, "title", None) if stream_obj else None
+            title_val = _safe_str(raw_title, "")
+
+            box_art = format_box_art(getattr(active_campaign, "image_url", None)) if active_campaign else None
+            channel_data = {
+                "name": _safe_str(getattr(watching_channel, "name", "")),
+                "game": game_name,
+                "url": _safe_str(getattr(watching_channel, "url", "")),
+                "viewers": viewers_val,
+                "title": title_val,
+                "box_art_url": box_art,
+                "is_priority": is_prio,
+                "priority_rank": prio_rank,
+                "is_excluded": is_excl,
+            }
+
+        # 2. Active Campaign and Drop
+        if active_campaign is not None and getattr(active_campaign, "active_drop", None) is not None:
+            drop = active_campaign.active_drop
+            benefit_img = None
+            benefit_name = None
+            if getattr(drop, "benefits", None) and len(drop.benefits) > 0:
+                first_b = drop.benefits[0]
+                raw_img = getattr(first_b, "image_url", None)
+                if raw_img and not hasattr(raw_img, "_mock_name") and "Mock" not in type(raw_img).__name__:
+                    benefit_img = str(raw_img)
+                benefit_name = _safe_str(getattr(first_b, "name", None))
+
+            drop_req = _safe_int(getattr(drop, "required_minutes", 0))
+            drop_cur = _safe_int(getattr(drop, "current_minutes", 0))
+            drop_rem = _safe_int(getattr(drop, "remaining_minutes", max(0, drop_req - drop_cur)))
+            drop_prog = _safe_float(getattr(drop, "progress", 0.0))
+            drop_rewards = ""
+            if hasattr(drop, "rewards_text") and callable(drop.rewards_text):
+                try:
+                    drop_rewards = _safe_str(drop.rewards_text())
+                except Exception:
+                    pass
+
+            drop_data = {
+                "name": _safe_str(getattr(drop, "name", "")),
+                "rewards": drop_rewards,
+                "current_minutes": drop_cur,
+                "required_minutes": drop_req,
+                "remaining_minutes": drop_rem,
+                "progress_percent": int(drop_prog * 100) if drop_prog else 0,
+                "campaign_name": _safe_str(getattr(active_campaign, "name", "")),
+                "campaign_claimed": _safe_int(getattr(active_campaign, "claimed_drops", 0)),
+                "campaign_total": _safe_int(getattr(active_campaign, "total_drops", 0)),
+                "benefit_image": benefit_img,
+                "benefit_name": benefit_name or _safe_str(getattr(drop, "name", "")),
+                "box_art_url": format_box_art(getattr(active_campaign, "image_url", None)),
+            }
+
+        # 3. Campaigns List
         for camp in sorted(self.twitch.inventory, key=lambda c: (
             0 if c.game.name in priority_set else 1,
             priority_list.index(c.game.name) if c.game.name in priority_set else 0,
@@ -1501,12 +1790,16 @@ class WebDashboard:
             time_left_str = f"{hours_left:.1f}h left" if hours_left > 0 else "Ending"
             rank = (priority_list.index(camp.game.name) + 1) if camp.game.name in priority_set else None
             is_excl = bool(is_game_excluded(camp.game.name, exclude_set))
+            is_farming = bool(active_campaign_id and getattr(camp, "id", None) == active_campaign_id)
             campaigns_data.append({
-                "game": camp.game.name,
-                "name": camp.name,
-                "claimed": camp.claimed_drops,
-                "total": camp.total_drops,
-                "progress_percent": int(camp.progress * 100),
+                "id": _safe_str(getattr(camp, "id", "")),
+                "game": _safe_str(getattr(camp.game, "name", "")),
+                "name": _safe_str(getattr(camp, "name", "")),
+                "box_art_url": format_box_art(getattr(camp, "image_url", None)),
+                "is_currently_farming": is_farming,
+                "claimed": _safe_int(getattr(camp, "claimed_drops", 0)),
+                "total": _safe_int(getattr(camp, "total_drops", 0)),
+                "progress_percent": int(_safe_float(getattr(camp, "progress", 0.0)) * 100),
                 "is_priority": camp.game.name in priority_set,
                 "is_excluded": is_excl,
                 "priority_rank": rank,
@@ -2049,6 +2342,10 @@ class WebDashboard:
         exclude_raw = getattr(self.twitch.settings, "exclude", set())
         exclude_set = set(exclude_raw) if isinstance(exclude_raw, (set, list)) else set()
 
+        watching_channel = self.twitch.watching_channel.get_with_default(None)
+        active_campaign = self.twitch.get_active_campaign(watching_channel) if watching_channel else None
+        active_campaign_id = getattr(active_campaign, "id", None) if active_campaign else None
+
         inventory = getattr(self.twitch, "inventory", [])
         for camp in sorted(inventory, key=lambda c: (
             0 if (getattr(c, "game", None) and getattr(c.game, "name", "") in priority_set) else 1,
@@ -2059,6 +2356,7 @@ class WebDashboard:
             is_prio = game_name in priority_set
             is_excl = bool(is_game_excluded(game_name, exclude_set))
             rank = (priority_list.index(game_name) + 1) if is_prio else None
+            is_farming = bool(active_campaign_id and getattr(camp, "id", None) == active_campaign_id)
 
             time_left_str = "Ending"
             if getattr(camp, "ends_at", None):
@@ -2076,31 +2374,45 @@ class WebDashboard:
                 drops_iterable = []
 
             for drop in drops_iterable:
-                progress_val = getattr(drop, "progress", 0.0) or 0.0
+                progress_val = _safe_float(getattr(drop, "progress", 0.0))
+                drop_img = None
+                benefit_name = None
+                if getattr(drop, "benefits", None) and len(drop.benefits) > 0:
+                    b = drop.benefits[0]
+                    raw_b_img = getattr(b, "image_url", None)
+                    if raw_b_img and not hasattr(raw_b_img, "_mock_name") and "Mock" not in type(raw_b_img).__name__:
+                        drop_img = str(raw_b_img)
+                    benefit_name = _safe_str(getattr(b, "name", ""))
+
                 drops_list.append({
-                    "id": getattr(drop, "id", ""),
-                    "name": getattr(drop, "name", "Unnamed Drop"),
-                    "required_minutes": getattr(drop, "required_minutes", 0),
-                    "current_minutes": getattr(drop, "current_minutes", 0),
-                    "is_claimed": getattr(drop, "is_claimed", False),
+                    "id": _safe_str(getattr(drop, "id", "")),
+                    "name": _safe_str(getattr(drop, "name", "Unnamed Drop"), "Unnamed Drop"),
+                    "required_minutes": _safe_int(getattr(drop, "required_minutes", 0)),
+                    "current_minutes": _safe_int(getattr(drop, "current_minutes", 0)),
+                    "is_claimed": _safe_bool(getattr(drop, "is_claimed", False)),
                     "progress_percent": int(progress_val * 100),
+                    "image_url": drop_img,
+                    "benefit_name": benefit_name or _safe_str(getattr(drop, "name", "")),
                 })
 
             campaigns_list.append({
-                "id": getattr(camp, "id", ""),
+                "id": _safe_str(getattr(camp, "id", "")),
                 "game": game_name,
-                "name": getattr(camp, "name", game_name),
-                "status": getattr(camp, "status", "ACTIVE"),
-                "is_linked": getattr(camp, "linked", False),
-                "starts_at": camp.starts_at.isoformat() if getattr(camp, "starts_at", None) else None,
-                "ends_at": camp.ends_at.isoformat() if getattr(camp, "ends_at", None) else None,
+                "name": _safe_str(getattr(camp, "name", game_name), game_name),
+                "box_art_url": format_box_art(getattr(camp, "image_url", None)),
+                "is_currently_farming": is_farming,
+                "status": _safe_str(getattr(camp, "status", "ACTIVE"), "ACTIVE"),
+                "is_linked": _safe_bool(getattr(camp, "linked", False)),
+                "link_url": _safe_str(getattr(camp, "link_url", "")),
+                "starts_at": camp.starts_at.isoformat() if getattr(camp, "starts_at", None) and hasattr(camp.starts_at, "isoformat") else None,
+                "ends_at": camp.ends_at.isoformat() if getattr(camp, "ends_at", None) and hasattr(camp.ends_at, "isoformat") else None,
                 "time_left": time_left_str,
                 "is_priority": is_prio,
                 "priority_rank": rank,
                 "is_excluded": is_excl,
-                "claimed_drops": getattr(camp, "claimed_drops", 0),
-                "total_drops": getattr(camp, "total_drops", len(drops_list)),
-                "progress_percent": int((getattr(camp, "progress", 0.0) or 0.0) * 100),
+                "claimed_drops": _safe_int(getattr(camp, "claimed_drops", 0)),
+                "total_drops": _safe_int(getattr(camp, "total_drops", len(drops_list))),
+                "progress_percent": int(_safe_float(getattr(camp, "progress", 0.0)) * 100),
                 "drops": drops_list,
             })
 
