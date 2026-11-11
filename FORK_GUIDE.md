@@ -195,7 +195,7 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 - Auto-recovers by converting any `cookies.txt` or `cookies.json` present in `files/`.
 
 #### 8. `test_suite.py` (Automated Parity & Regression Test Suite)
-- **34 automated unit and integration tests across 9 test classes**:
+- **35 automated unit and integration tests across 9 test classes**:
   - `TestUpstreamSync`: Validates `WATCH_INTERVAL = 20s`, zero-delta drop timer fix (`378697a`), playlist HEAD request mining method (`f693b0c`), and Chrome 156 / Android App 31.8.0 user-agents (`69a4ff9`).
   - `TestDiscordNotifications`: Validates toggle disable/enable, webhook suppression, rich embed layouts, 1-week weekly summary digests, and test notifications.
   - `TestSettingsIntervals`: Validates 1-week interval parsing (`1w`, `7d`, `10080m`) and `DISCORD_NOTIFICATIONS_ENABLED` env parser.
@@ -204,7 +204,7 @@ These files do not exist upstream. They can be edited, extended, or refactored f
   - `TestNetworkResilienceAndLogging`: Validates `is_network_healthy` property under connection dropouts and verifies inactive game suggestions log at `INFO` level.
   - `TestJsonSaveAndPriorityRanking`: Validates Docker bind-mount `EBUSY` fallback (`shutil.copyfile`) and priority ranking CRUD logic.
   - `TestBugFixesAndRegression`: Validates game exclusion exact matching, distinct game editions (e.g. `World of Tanks` vs `World of Tanks: HEAT`), wildcard pattern matching (`World of Tanks*`), priority override rule (`priority > exclude`), Discord bot 10062 timeout deferral, and Web Dashboard `now` variable and metrics mapping.
-  - `TestDashboardQOLFeatures`: Validates `format_box_art` templated URL normalization and mock handling, active farm recognition, channel title/viewer serialization, and drop benefit thumbnail parsing.
+  - `TestDashboardQOLFeatures`: Validates `format_box_art` templated URL normalization and mock handling, active farm recognition, channel title/viewer serialization, drop benefit thumbnail parsing, and `games_catalog` options payload for autocomplete and quick-pick chips.
 
 ---
 
@@ -419,7 +419,7 @@ Before committing, merging, or deploying changes, run through this checklist:
   ```bash
   python test_suite.py
   ```
-  Verify that all **34/34 tests pass** (`OK`).
+  Verify that all **35/35 tests pass** (`OK`).
 - [ ] **Run Module Import Audit**:
   ```bash
   python -c "import channel, constants, inventory, utils, settings, twitch, main, web_dashboard, discord_notifier, discord_bot, cookie_refresher, metrics, healthcheck, healthcheck_writer, config_validator"

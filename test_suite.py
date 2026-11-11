@@ -1154,6 +1154,67 @@ class TestDashboardQOLFeatures(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_games_catalog_for_autocomplete_and_quick_chips(self):
+        """Verify GET /api/settings options includes rich games_catalog with box art and claim history"""
+        from web_dashboard import WebDashboard
+        import json
+        from datetime import datetime, timezone, timedelta
+        from aiohttp.test_utils import make_mocked_request
+
+        mock_camp1 = MagicMock()
+        mock_camp1.game.name = "Rust"
+        mock_camp1.image_url = "https://static-cdn.jtvnw.net/ttv-boxart/rust_{width}x{height}.jpg"
+        mock_camp1.active = True
+        mock_camp1.linked = True
+        mock_camp1.claimed_drops = 3
+        mock_camp1.total_drops = 3
+        mock_camp1.ends_at = datetime.now(timezone.utc) + timedelta(hours=5)
+
+        mock_camp2 = MagicMock()
+        mock_camp2.game.name = "Warframe"
+        mock_camp2.image_url = None
+        mock_camp2.active = False
+        mock_camp2.linked = True
+        mock_camp2.claimed_drops = 1
+        mock_camp2.total_drops = 2
+        mock_camp2.ends_at = None
+
+        mock_settings = MagicMock()
+        mock_settings.priority_mode.name = "BALANCED"
+        mock_settings.priority = ["Rust"]
+        mock_settings.exclude = {"Fortnite*"}
+        mock_settings.discord_webhook_url = ""
+        mock_settings.discord_notifications_enabled = True
+        mock_settings.discord_summary_interval_minutes = 60
+        mock_settings.web_port = 8080
+        mock_settings.web_password = ""
+
+        mock_twitch = MagicMock()
+        mock_twitch.settings = mock_settings
+        mock_twitch.inventory = [mock_camp1, mock_camp2]
+
+        dashboard = WebDashboard(mock_twitch, host="127.0.0.1", port=8080)
+        req = make_mocked_request("GET", "/api/settings")
+
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(dashboard.handle_get_settings(req))
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.text)
+            self.assertIn("games_catalog", data["options"])
+            catalog = data["options"]["games_catalog"]
+            self.assertTrue(len(catalog) >= 3)  # Rust, Warframe, Fortnite*
+
+            rust_entry = next(g for g in catalog if g["name"] == "Rust")
+            self.assertTrue(rust_entry["is_active"])
+            self.assertEqual(rust_entry["claimed_drops"], 3)
+            self.assertIsNotNone(rust_entry["box_art_url"])
+
+            # Verify active games are sorted first in catalog
+            self.assertTrue(catalog[0]["is_active"])
+        finally:
+            loop.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
