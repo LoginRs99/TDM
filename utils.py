@@ -465,8 +465,12 @@ def get_game_root(name: str) -> str:
 
 def is_game_excluded(game_name: str | Game | None, exclude_list: abc.Iterable[str]) -> bool:
     """
-    Checks if a game is excluded by matching exact name (case-insensitive),
-    subtitle/edition prefix, or franchise root (e.g. World of Tanks Console vs World of Tanks: HEAT).
+    Checks if a game is excluded.
+    Supports:
+    - Exact match (case-insensitive and trimmed): "World of Tanks" == "world of tanks"
+    - Wildcard prefix: if exclude entry ends with '*', e.g. "World of Tanks*" matches all games starting with "World of Tanks"
+    - By default, distinct editions ("World of Tanks" vs "World of Tanks: HEAT") are independent,
+      allowing users to exclude the base game while still farming a specific edition (or vice versa).
     """
     if not game_name or not exclude_list:
         return False
@@ -474,27 +478,22 @@ def is_game_excluded(game_name: str | Game | None, exclude_list: abc.Iterable[st
     gn_clean = gn_str.strip().casefold()
     if not gn_clean:
         return False
-    gn_root = get_game_root(gn_str)
 
     for ex in exclude_list:
-        ex_clean = str(ex).strip().casefold()
-        if not ex_clean:
+        ex_str = str(ex).strip()
+        if not ex_str:
             continue
-        # 1. Exact match (case-insensitive)
+        ex_clean = ex_str.casefold()
+
+        # Wildcard match (e.g. "World of Tanks*")
+        if ex_str.endswith("*"):
+            prefix = ex_clean[:-1].strip()
+            if prefix and gn_clean.startswith(prefix):
+                return True
+            continue
+
+        # Exact match (case-insensitive & trimmed)
         if gn_clean == ex_clean:
-            return True
-        # 2. Subtitle / prefix match (e.g. ex="World of Tanks", gn="World of Tanks: HEAT")
-        if gn_clean.startswith(ex_clean):
-            remainder = gn_clean[len(ex_clean):]
-            if remainder:
-                if remainder[0] in (":", "-", "–", "—", "(", "["):
-                    return True
-                # For space separator, require at least 2 words or 6 chars to prevent short word false positives (e.g. "The", "War")
-                if remainder[0] == " " and (len(ex_clean.split()) >= 2 or len(ex_clean) >= 6):
-                    return True
-        # 3. Root franchise match (e.g. ex="World of Tanks Console", gn="World of Tanks: HEAT")
-        ex_root = get_game_root(str(ex))
-        if ex_root and len(ex_root) >= 3 and ex_root == gn_root:
             return True
 
     return False

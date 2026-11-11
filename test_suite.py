@@ -770,18 +770,28 @@ class TestNetworkResilienceAndLogging(unittest.TestCase):
         self.assertFalse(twitch_obj.is_network_healthy)
 
     def test_invalid_game_names_logged_as_info(self):
-        """Verify _log_invalid_game_names logs suggestions at INFO level, not WARNING"""
+        """Verify _log_invalid_game_names logs suggestions at INFO level for priority, but not for exclude"""
         from twitch import Twitch
         import logging
 
         with self.assertLogs("TwitchDrops", level=logging.INFO) as log:
             Twitch._log_invalid_game_names(
-                "exclude",
+                "priority",
                 ["EA Sports College Football 26"],
                 ["EA Sports College Football 27"]
             )
             self.assertTrue(any("INFO" in record for record in log.output))
             self.assertFalse(any("WARNING" in record for record in log.output))
+
+        # For exclude games: verify no suggestions are logged
+        with self.assertLogs("TwitchDrops", level=logging.INFO) as log:
+            Twitch._log_invalid_game_names(
+                "exclude",
+                ["World of Tanks Console"],
+                ["World of Tanks"]
+            )
+            # Should not contain "Did you mean"
+            self.assertFalse(any("Did you mean" in record for record in log.output))
 
 
 class TestJsonSaveAndPriorityRanking(unittest.TestCase):
@@ -849,45 +859,33 @@ class TestJsonSaveAndPriorityRanking(unittest.TestCase):
 class TestBugFixesAndRegression(unittest.TestCase):
     """Regression tests for the 4 issues reported in user production."""
 
-    def test_is_game_excluded_franchise_and_subtitles(self):
-        """Verify is_game_excluded handles casing, subtitles, platform suffixes, and annual titles"""
-        from utils import is_game_excluded, get_game_root
+    def test_is_game_excluded_exact_and_wildcard(self):
+        """Verify is_game_excluded supports exact matching, distinct editions, and wildcard patterns"""
+        from utils import is_game_excluded
 
-        # 1. Root franchise extraction
-        self.assertEqual(get_game_root("World of Tanks: HEAT"), "world of tanks")
-        self.assertEqual(get_game_root("World of Tanks Console"), "world of tanks")
-        self.assertEqual(get_game_root("World of Tanks"), "world of tanks")
-        self.assertEqual(get_game_root("EA Sports College Football 26"), "ea sports college football")
-        self.assertEqual(get_game_root("EA Sports College Football 27"), "ea sports college football")
-        self.assertEqual(get_game_root("NBA 2K26"), "nba 2k")
-        self.assertEqual(get_game_root("NBA 2K27"), "nba 2k")
-        self.assertEqual(get_game_root("Out of the Park Baseball 26"), "out of the park baseball")
-        self.assertEqual(get_game_root("Out of the Park Baseball 27"), "out of the park baseball")
-
-        # 2. Case-insensitive exact match
+        # 1. Case-insensitive exact match
         self.assertTrue(is_game_excluded("World of Tanks", {"world of tanks"}))
         self.assertTrue(is_game_excluded("world of tanks", {"World of Tanks"}))
+        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks: HEAT"}))
 
-        # 3. Subtitle / edition match: Exclude "World of Tanks" -> matches "World of Tanks: HEAT"
-        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks"}))
+        # 2. Distinct editions are independent:
+        # User wants to exclude "World of Tanks" while still allowing "World of Tanks: HEAT"
+        self.assertFalse(is_game_excluded("World of Tanks: HEAT", {"World of Tanks"}))
+        self.assertFalse(is_game_excluded("World of Tanks", {"World of Tanks: HEAT"}))
+        self.assertFalse(is_game_excluded("Path of Exile 2", {"Path of Exile"}))
 
-        # 4. Platform edition / root match: Exclude "World of Tanks Console" -> matches "World of Tanks: HEAT"
-        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks Console"}))
-        self.assertTrue(is_game_excluded("World of Tanks", {"World of Tanks Console"}))
+        # 3. Wildcard matching: "World of Tanks*" excludes all variants
+        self.assertTrue(is_game_excluded("World of Tanks", {"World of Tanks*"}))
+        self.assertTrue(is_game_excluded("World of Tanks: HEAT", {"World of Tanks*"}))
+        self.assertTrue(is_game_excluded("World of Tanks Console", {"World of Tanks*"}))
 
-        # 5. Annual sports edition mismatch from user logs
-        self.assertTrue(is_game_excluded("EA Sports College Football 27", {"EA Sports College Football 26"}))
-        self.assertTrue(is_game_excluded("EA Sports College Football 28", {"EA Sports College Football 27"}))
-        self.assertTrue(is_game_excluded("NBA 2K27", {"NBA 2K26"}))
-        self.assertTrue(is_game_excluded("Out of the Park Baseball 27", {"Out of the Park Baseball 26"}))
-
-        # 6. Negative matches: verify no false positives
+        # 4. Negative matches: verify no false positives
         self.assertFalse(is_game_excluded("World of Warcraft", {"World of Tanks"}))
         self.assertFalse(is_game_excluded("Warframe", {"War"}))
         self.assertFalse(is_game_excluded("The Finals", {"The"}))
 
     def test_twitch_exclude_and_can_watch_logic(self):
-        """Verify can_watch and priority calculation reject excluded and non-wanted games"""
+        """Verify can_watch and priority calculation reject excluded games and priority overrides exclude"""
         from twitch import Twitch
         from channel import Channel
         from utils import Game
@@ -895,7 +893,7 @@ class TestBugFixesAndRegression(unittest.TestCase):
 
         twitch_obj = Twitch.__new__(Twitch)
         twitch_obj.settings = MagicMock()
-        twitch_obj.settings.exclude = {"World of Tanks"}
+        twitch_obj.settings.exclude = {"World of Tanks: HEAT"}
         twitch_obj.settings.priority = ["Rainbow Six Siege"]
         twitch_obj.settings.priority_mode = PriorityMode.BALANCED
         twitch_obj.settings.enable_badges_emotes = True
@@ -931,6 +929,11 @@ class TestBugFixesAndRegression(unittest.TestCase):
         # 3. get_priority must return MAX_INT in non-balanced mode
         twitch_obj.settings.priority_mode = PriorityMode.PRIORITY_ONLY
         self.assertEqual(twitch_obj.get_priority(wot_channel), MAX_INT)
+
+        # 4. PRIORITY ALWAYS OVERRIDES EXCLUDE:
+        # If user puts "World of Tanks: HEAT" in priority list, is_game_excluded returns False!
+        twitch_obj.settings.priority = ["World of Tanks: HEAT"]
+        self.assertFalse(twitch_obj.is_game_excluded(wot_game))
 
     def test_web_dashboard_status_now_and_metrics(self):
         """Verify handle_status defines now correctly, serializes campaigns without NameError, and maps metrics"""

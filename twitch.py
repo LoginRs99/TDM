@@ -394,11 +394,15 @@ class Twitch:
         self.healthcheck.update_status(self._consecutive_gql_failures, error=error)
 
     def is_game_excluded(self, game: Game | str | None) -> bool:
-        """Checks if a game is excluded, handling casing, subtitles, and franchises."""
+        """Checks if a game is excluded. Priority always overrides exclude."""
         if game is None:
             return False
         name = game.name if hasattr(game, "name") else str(game)
-        return is_game_excluded(name, self.settings.exclude)
+        gn_clean = name.strip().casefold()
+        # If game is in priority, PRIORITY ALWAYS WINS!
+        if any(gn_clean == p.strip().casefold() for p in getattr(self.settings, "priority", [])):
+            return False
+        return is_game_excluded(name, getattr(self.settings, "exclude", set()))
         
     def get_balanced_priority(self, channel: Channel) -> float:
         """
@@ -525,21 +529,21 @@ class Twitch:
     ) -> None:
         inactive_count = 0
         for name in invalid_names:
-            suggestions = get_close_matches(name, available_names, n=3, cutoff=0.72)
-            if suggestions:
-                logger.info(
-                    "Configured %s game %r is not active now. Did you mean: %s?",
-                    setting_name,
-                    name,
-                    ", ".join(repr(suggestion) for suggestion in suggestions),
-                )
-            else:
-                inactive_count += 1
-                logger.debug(
-                    "Configured %s game %r is not active in current campaigns.",
-                    setting_name,
-                    name,
-                )
+            if setting_name == "priority":
+                suggestions = get_close_matches(name, available_names, n=3, cutoff=0.72)
+                if suggestions:
+                    logger.info(
+                        "Configured priority game %r is not active now. Did you mean: %s?",
+                        name,
+                        ", ".join(repr(suggestion) for suggestion in suggestions),
+                    )
+                    continue
+            inactive_count += 1
+            logger.debug(
+                "Configured %s game %r is not active in current campaigns.",
+                setting_name,
+                name,
+            )
         if inactive_count:
             logger.info(
                 "%d configured %s game(s) are not active right now; keeping them for future campaigns.",
