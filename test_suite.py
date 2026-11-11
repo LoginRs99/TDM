@@ -747,6 +747,139 @@ class TestWebDashboardAndHealthcheck(unittest.TestCase):
         finally:
             loop.close()
 
+    def test_pause_and_resume_mining_and_version(self):
+        """Verify pause/resume mining mechanics, API endpoints, state transition, and versioning"""
+        from web_dashboard import WebDashboard
+        from twitch import Twitch
+        from constants import State
+        import json
+
+        # 1. Test Twitch class pause/resume/toggle_pause methods directly
+        twitch_mock = MagicMock(spec=Twitch)
+        twitch_mock.is_paused = False
+        twitch_mock._state = State.CHANNEL_SWITCH
+        twitch_mock._state_change = MagicMock()
+        twitch_mock.watching_channel = MagicMock()
+        twitch_mock.watching_channel.get_with_default.return_value = None
+        twitch_mock.inventory = []
+        twitch_mock.settings = MagicMock()
+        twitch_mock.settings.priority = []
+        twitch_mock.settings.exclude = set()
+        twitch_mock.settings.priority_mode = MagicMock()
+        twitch_mock.settings.priority_mode.name = "BALANCED"
+        twitch_mock.settings.web_password = ""
+
+        twitch_mock.change_state = lambda s: setattr(twitch_mock, "_state", s)
+        twitch_mock.stop_watching = MagicMock()
+        twitch_mock.pause = lambda: Twitch.pause(twitch_mock)
+        twitch_mock.resume = lambda: Twitch.resume(twitch_mock)
+        twitch_mock.toggle_pause = lambda: Twitch.toggle_pause(twitch_mock)
+
+        # Initially active
+        self.assertFalse(twitch_mock.is_paused)
+        self.assertEqual(twitch_mock._state, State.CHANNEL_SWITCH)
+
+        # Trigger Pause
+        res_toggled = twitch_mock.toggle_pause()
+        self.assertTrue(res_toggled)
+        self.assertTrue(twitch_mock.is_paused)
+        self.assertEqual(twitch_mock._state, State.IDLE)
+        twitch_mock.stop_watching.assert_called_once()
+
+        # Trigger Resume
+        res_toggled_back = twitch_mock.toggle_pause()
+        self.assertFalse(res_toggled_back)
+        self.assertFalse(twitch_mock.is_paused)
+        self.assertEqual(twitch_mock._state, State.CHANNEL_SWITCH)
+
+        # 2. Test WebDashboard pause / resume / toggle endpoints and versioning
+        dashboard = WebDashboard(twitch_mock, host="127.0.0.1", port=8080)
+        loop = asyncio.new_event_loop()
+        try:
+            # POST /api/action/pause
+            req_pause = MagicMock()
+            resp_pause = loop.run_until_complete(dashboard.handle_pause(req_pause))
+            data_pause = json.loads(resp_pause.text)
+            self.assertEqual(data_pause["status"], "ok")
+            self.assertTrue(data_pause["is_paused"])
+            self.assertEqual(data_pause["state"], "PAUSED")
+            self.assertTrue(dashboard.is_paused)
+
+            # GET /api/status while paused
+            req_status = MagicMock()
+            resp_status = loop.run_until_complete(dashboard.handle_status(req_status))
+            data_status = json.loads(resp_status.text)
+            self.assertEqual(data_status["version"], "v2.5-headless")
+            self.assertTrue(data_status["is_paused"])
+            self.assertEqual(data_status["state"], "PAUSED")
+
+            # GET /api/health while paused
+            req_health = MagicMock()
+            resp_health = loop.run_until_complete(dashboard.handle_health(req_health))
+            data_health = json.loads(resp_health.text)
+            self.assertEqual(data_health["version"], "v2.5-headless")
+            self.assertTrue(data_health["is_paused"])
+            self.assertEqual(data_health["state"], "PAUSED")
+
+            # POST /api/action/resume
+            req_resume = MagicMock()
+            resp_resume = loop.run_until_complete(dashboard.handle_resume(req_resume))
+            data_resume = json.loads(resp_resume.text)
+            self.assertEqual(data_resume["status"], "ok")
+            self.assertFalse(data_resume["is_paused"])
+            self.assertEqual(data_resume["state"], "CHANNEL_SWITCH")
+            self.assertFalse(dashboard.is_paused)
+
+            # POST /api/action/toggle-pause (from unpaused -> paused)
+            req_toggle = MagicMock()
+            resp_toggle = loop.run_until_complete(dashboard.handle_toggle_pause(req_toggle))
+            data_toggle = json.loads(resp_toggle.text)
+            self.assertTrue(data_toggle["is_paused"])
+            self.assertTrue(dashboard.is_paused)
+
+            # POST /api/action/switch (should unpause automatically)
+            req_switch = MagicMock()
+            resp_switch = loop.run_until_complete(dashboard.handle_switch(req_switch))
+            data_switch = json.loads(resp_switch.text)
+            self.assertEqual(data_switch["status"], "ok")
+            self.assertFalse(dashboard.is_paused)
+            self.assertEqual(twitch_mock._state, State.CHANNEL_SWITCH)
+        finally:
+            loop.close()
+
+        # 3. Test Discord Bot StatusView pause_button
+        from discord_bot import DiscordBotService, StatusView
+        bot_service = MagicMock(spec=DiscordBotService)
+        bot_service.twitch = twitch_mock
+        bot_service.is_authorized.return_value = True
+
+        status_view = StatusView(bot_service)
+        self.assertIsNotNone(status_view)
+        pause_btns = [c for c in status_view.children if getattr(c, "custom_id", None) == "tdm_btn_pause"]
+        self.assertEqual(len(pause_btns), 1)
+
+        mock_interaction = MagicMock()
+        mock_interaction.response = MagicMock()
+        mock_interaction.response.send_message = AsyncMock()
+
+        loop2 = asyncio.new_event_loop()
+        try:
+            # Miner starts unpaused
+            twitch_mock.is_paused = False
+            loop2.run_until_complete(status_view.pause_button.callback(mock_interaction))
+            self.assertTrue(twitch_mock.is_paused)
+            mock_interaction.response.send_message.assert_awaited()
+            msg_text = mock_interaction.response.send_message.call_args[0][0]
+            self.assertIn("paused", msg_text.lower())
+
+            # Click again to resume
+            loop2.run_until_complete(status_view.pause_button.callback(mock_interaction))
+            self.assertFalse(twitch_mock.is_paused)
+            msg_text_resumed = mock_interaction.response.send_message.call_args[0][0]
+            self.assertIn("resumed", msg_text_resumed.lower())
+        finally:
+            loop2.close()
+
 
 class TestNetworkResilienceAndLogging(unittest.TestCase):
     def test_twitch_network_healthy_property(self):

@@ -132,7 +132,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         ⛏️
                     </div>
                     <div>
-                        <h1 class="text-base font-bold text-white leading-tight">Twitch Drops Miner</h1>
+                        <div class="flex items-center space-x-2">
+                            <h1 class="text-base font-bold text-white leading-tight">Twitch Drops Miner</h1>
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-twitch-dark border border-twitch-border text-purple-300">v2.5</span>
+                        </div>
                         <p class="text-[11px] text-gray-400">Control Center</p>
                     </div>
                 </div>
@@ -248,6 +251,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                     <!-- Direct Active Farm Quick-Action Controls -->
                     <div id="hero-action-buttons" class="flex items-center flex-wrap gap-2 w-full md:w-auto justify-end border-t md:border-t-0 border-twitch-border/60 pt-3 md:pt-0">
+                        <button id="btn-hero-pause" onclick="togglePauseMining()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-twitch-dark hover:bg-twitch-hover text-gray-200 border border-twitch-border transition active:scale-95 flex items-center space-x-1.5 shadow-sm" title="Pause or resume mining loop">
+                            <span id="btn-hero-pause-icon">⏸️</span>
+                            <span id="btn-hero-pause-label">Pause Mining</span>
+                        </button>
                         <button id="btn-hero-prioritize" onclick="quickActionPriorityFromHero()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-twitch-purple/20 text-purple-300 hover:bg-twitch-purple hover:text-white border border-twitch-purple/40 transition active:scale-95 flex items-center space-x-1.5 shadow-sm">
                             <span>⭐</span>
                             <span id="btn-hero-prioritize-label">Prioritize Game</span>
@@ -290,7 +297,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                     <div class="flex justify-between items-center text-[11px] text-gray-500">
                         <span id="hero-campaign-claimed">Campaign Progress: 0/0 drops</span>
-                        <span id="hero-drop-eta" class="text-gray-400 font-medium">ETA: --</span>
+                        <div class="flex items-center space-x-3">
+                            <a href="https://www.twitch.tv/drops/inventory" target="_blank" rel="noopener noreferrer" class="text-twitch-purple hover:text-white transition flex items-center space-x-1" title="Open official Twitch Drops Inventory in new tab">
+                                <span>🎁</span>
+                                <span>Twitch Inventory ↗</span>
+                            </a>
+                            <span id="hero-drop-eta" class="text-gray-400 font-medium">ETA: --</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -331,23 +344,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <p class="text-xs text-gray-400 mt-2">Trigger immediate background actions without restarting your Docker container.</p>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-2 text-xs">
-                        <button onclick="requestAction('refresh')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
-                            <span>🔄</span>
-                            <span>Refresh Inventory</span>
+                    <div class="space-y-2">
+                        <button id="btn-quick-pause" onclick="togglePauseMining()" class="w-full p-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border text-gray-200 shadow-sm active:scale-95">
+                            <span id="quick-pause-icon">⏸️</span>
+                            <span id="quick-pause-label">Pause Mining</span>
                         </button>
-                        <button onclick="requestAction('switch')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
-                            <span>⏭️</span>
-                            <span>Switch Stream</span>
-                        </button>
-                        <button onclick="requestAction('refresh-cookies')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
-                            <span>🔐</span>
-                            <span>Renew Cookies</span>
-                        </button>
-                        <button onclick="requestAction('toggle-notifications')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
-                            <span id="overview-btn-disc-icon">🔔</span>
-                            <span id="overview-btn-disc-label">Mute Discord</span>
-                        </button>
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <button onclick="requestAction('refresh')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
+                                <span>🔄</span>
+                                <span>Refresh Inventory</span>
+                            </button>
+                            <button onclick="requestAction('switch')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
+                                <span>⏭️</span>
+                                <span>Switch Stream</span>
+                            </button>
+                            <button onclick="requestAction('refresh-cookies')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
+                                <span>🔐</span>
+                                <span>Renew Cookies</span>
+                            </button>
+                            <button onclick="requestAction('toggle-notifications')" class="p-2.5 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border rounded-lg font-medium text-gray-200 transition text-left flex items-center space-x-2">
+                                <span id="overview-btn-disc-icon">🔔</span>
+                                <span id="overview-btn-disc-label">Mute Discord</span>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="pt-3 border-t border-twitch-border text-[11px] text-gray-500 flex justify-between items-center">
@@ -396,9 +415,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </button>
                 </div>
 
-                <div class="relative w-full md:w-72">
-                    <input id="campaigns-search" type="text" placeholder="Search game or campaign..." oninput="renderCampaignsTabUI()" class="w-full px-3.5 py-2 pl-9 bg-twitch-dark border border-twitch-border rounded-lg text-white text-xs focus:outline-none focus:border-twitch-purple transition">
-                    <span class="absolute left-3 top-2.5 text-gray-400 text-xs">🔍</span>
+                <div class="flex items-center space-x-2 w-full md:w-auto">
+                    <a href="https://www.twitch.tv/drops/inventory" target="_blank" rel="noopener noreferrer" class="px-3 py-2 rounded-lg text-xs font-semibold bg-twitch-dark hover:bg-twitch-purple hover:text-white text-gray-300 border border-twitch-border transition flex items-center space-x-1.5 whitespace-nowrap shadow-sm" title="View your earned and in-progress drops directly on Twitch">
+                        <span>🎁</span>
+                        <span>Open Twitch Inventory ↗</span>
+                    </a>
+                    <div class="relative w-full md:w-64">
+                        <input id="campaigns-search" type="text" placeholder="Search game or campaign..." oninput="renderCampaignsTabUI()" class="w-full px-3.5 py-2 pl-9 bg-twitch-dark border border-twitch-border rounded-lg text-white text-xs focus:outline-none focus:border-twitch-purple transition">
+                        <span class="absolute left-3 top-2.5 text-gray-400 text-xs">🔍</span>
+                    </div>
                 </div>
             </div>
 
@@ -853,13 +878,59 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function updateOverviewUI(data) {
+            const isPaused = Boolean(data.is_paused || data.state === 'PAUSED');
+            const state = isPaused ? 'PAUSED' : (data.state || 'IDLE');
             const stateBadge = document.getElementById('state-badge');
             if (stateBadge) {
-                const state = data.state || 'IDLE';
-                stateBadge.innerText = state;
-                stateBadge.className = state === 'ACTIVE' ? 'px-2.5 py-1 rounded-md text-xs font-semibold bg-purple-900/40 text-purple-300 border border-purple-700/60 whitespace-nowrap' :
+                stateBadge.innerText = isPaused ? '⏸️ PAUSED' : `State: ${state}`;
+                stateBadge.className = isPaused ? 'px-2.5 py-1 rounded-md text-xs font-bold bg-amber-950/80 text-amber-300 border border-amber-500/70 whitespace-nowrap shadow-sm' :
+                                       state === 'ACTIVE' ? 'px-2.5 py-1 rounded-md text-xs font-semibold bg-purple-900/40 text-purple-300 border border-purple-700/60 whitespace-nowrap' :
                                        state === 'IDLE' ? 'px-2.5 py-1 rounded-md text-xs font-semibold bg-gray-800 text-gray-400 border border-gray-700 whitespace-nowrap' :
                                        'px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-950/50 text-amber-300 border border-amber-800/60 whitespace-nowrap';
+            }
+
+            const heroLiveBadge = document.getElementById('hero-live-badge');
+            if (heroLiveBadge) {
+                if (isPaused) {
+                    heroLiveBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-600 text-white shadow-sm flex items-center space-x-1';
+                    heroLiveBadge.innerHTML = '<span>⏸️</span><span>PAUSED</span>';
+                } else if (data.channel && data.channel.name) {
+                    heroLiveBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 text-white shadow-sm flex items-center space-x-1';
+                    heroLiveBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span><span>LIVE</span>';
+                } else {
+                    heroLiveBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-gray-700 text-gray-300 shadow-sm flex items-center space-x-1';
+                    heroLiveBadge.innerHTML = '<span>💤</span><span>IDLE</span>';
+                }
+            }
+
+            const btnHeroPause = document.getElementById('btn-hero-pause');
+            const btnHeroPauseLabel = document.getElementById('btn-hero-pause-label');
+            const btnHeroPauseIcon = document.getElementById('btn-hero-pause-icon');
+            if (btnHeroPause && btnHeroPauseLabel && btnHeroPauseIcon) {
+                if (isPaused) {
+                    btnHeroPauseLabel.innerText = 'Resume Mining';
+                    btnHeroPauseIcon.innerText = '▶️';
+                    btnHeroPause.className = 'px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-950/50 hover:bg-emerald-900/70 text-emerald-300 border border-emerald-500/60 transition active:scale-95 flex items-center space-x-1.5 shadow-sm';
+                } else {
+                    btnHeroPauseLabel.innerText = 'Pause Mining';
+                    btnHeroPauseIcon.innerText = '⏸️';
+                    btnHeroPause.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-twitch-dark hover:bg-twitch-hover text-gray-200 border border-twitch-border transition active:scale-95 flex items-center space-x-1.5 shadow-sm';
+                }
+            }
+
+            const btnQuickPause = document.getElementById('btn-quick-pause');
+            const quickPauseLabel = document.getElementById('quick-pause-label');
+            const quickPauseIcon = document.getElementById('quick-pause-icon');
+            if (btnQuickPause && quickPauseLabel && quickPauseIcon) {
+                if (isPaused) {
+                    quickPauseLabel.innerText = 'Resume Drops Mining';
+                    quickPauseIcon.innerText = '▶️';
+                    btnQuickPause.className = 'w-full p-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/60 text-emerald-300 shadow-sm active:scale-95';
+                } else {
+                    quickPauseLabel.innerText = 'Pause Drops Mining';
+                    quickPauseIcon.innerText = '⏸️';
+                    btnQuickPause.className = 'w-full p-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-2 bg-twitch-dark hover:bg-twitch-hover border border-twitch-border text-gray-200 shadow-sm active:scale-95';
+                }
             }
 
             const netBadge = document.getElementById('net-badge');
@@ -929,20 +1000,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     else heroExcludedBadge.classList.add('hidden');
                 }
 
-                if (heroActionButtons) heroActionButtons.classList.remove('hidden');
+                const btnHeroPrioritize = document.getElementById('btn-hero-prioritize');
+                const btnHeroExclude = document.getElementById('btn-hero-exclude');
+                if (btnHeroPrioritize) btnHeroPrioritize.classList.remove('hidden');
+                if (btnHeroExclude) btnHeroExclude.classList.remove('hidden');
                 if (btnHeroPrioLabel) btnHeroPrioLabel.innerText = ch.is_priority ? 'Prioritized (#1)' : 'Prioritize Game';
                 if (btnHeroExclLabel) btnHeroExclLabel.innerText = ch.is_excluded ? 'Un-Exclude' : 'Exclude Game';
             } else {
-                heroChannelName.innerText = 'No Active Stream';
+                heroChannelName.innerText = isPaused ? 'Mining Paused' : 'No Active Stream';
                 heroChannelName.removeAttribute('href');
-                heroGameName.innerText = 'Idle';
-                heroStreamTitle.innerText = 'Mining loop waiting for active drop campaigns...';
+                heroGameName.innerText = isPaused ? 'Paused' : 'Idle';
+                heroStreamTitle.innerText = isPaused ? 'Drop mining is paused by user. Click "Resume Mining" to restart.' : 'Mining loop waiting for active drop campaigns...';
                 heroViewers.innerText = '0 viewers';
                 if (heroPriorityBadge) heroPriorityBadge.classList.add('hidden');
                 if (heroExcludedBadge) heroExcludedBadge.classList.add('hidden');
                 if (heroBoxArt) heroBoxArt.classList.add('hidden');
                 if (heroBoxArtPlaceholder) heroBoxArtPlaceholder.classList.remove('hidden');
-                if (heroActionButtons) heroActionButtons.classList.add('hidden');
+                const btnHeroPrioritize = document.getElementById('btn-hero-prioritize');
+                const btnHeroExclude = document.getElementById('btn-hero-exclude');
+                if (btnHeroPrioritize) btnHeroPrioritize.classList.add('hidden');
+                if (btnHeroExclude) btnHeroExclude.classList.add('hidden');
             }
 
             const drop = data.drop;
@@ -1731,6 +1808,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        async function togglePauseMining() {
+            try {
+                const res = await fetch('/api/action/toggle-pause', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message || (data.is_paused ? "Mining paused" : "Mining resumed"));
+                    await fetchStatus();
+                } else {
+                    showToast(data.error || "Failed to toggle pause state", 'error');
+                }
+            } catch (err) {
+                showToast(`Error: ${err}`, 'error');
+            }
+        }
+
         async function requestAction(action) {
             try {
                 const res = await fetch(`/api/action/${action}`, { method: 'POST' });
@@ -1931,6 +2023,14 @@ class WebDashboard:
         self.site: web.TCPSite | None = None
         self._setup_routes()
 
+    @property
+    def is_paused(self) -> bool:
+        return bool(getattr(self.twitch, "is_paused", False))
+
+    @is_paused.setter
+    def is_paused(self, val: bool):
+        self.twitch.is_paused = bool(val)
+
     @web.middleware
     async def _security_middleware(self, request: web.Request, handler):
         # 1. Authentication check (if password is set)
@@ -1989,6 +2089,9 @@ class WebDashboard:
         self.app.router.add_get("/api/2fa/screenshot", self.handle_2fa_screenshot)
         self.app.router.add_post("/api/action/submit-2fa", self.handle_submit_2fa)
         self.app.router.add_post("/api/action/switch", self.handle_switch)
+        self.app.router.add_post("/api/action/pause", self.handle_pause)
+        self.app.router.add_post("/api/action/resume", self.handle_resume)
+        self.app.router.add_post("/api/action/toggle-pause", self.handle_toggle_pause)
         self.app.router.add_post("/api/action/refresh", self.handle_refresh)
         self.app.router.add_post("/api/action/refresh-cookies", self.handle_refresh_cookies)
         self.app.router.add_post("/api/action/toggle-notifications", self.handle_toggle_notifications)
@@ -2020,7 +2123,9 @@ class WebDashboard:
 
     async def handle_health(self, request: web.Request) -> web.Response:
         """Public health check endpoint for Docker/Portainer/monitors."""
-        state_name = self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN"
+        is_paused = bool(getattr(self.twitch, "is_paused", False))
+        raw_state = self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN"
+        state_name = "PAUSED" if is_paused else raw_state
         watching_channel = self.twitch.watching_channel.get_with_default(None)
         uptime = 0.0
         if metrics := getattr(self.twitch, "metrics", None):
@@ -2028,6 +2133,8 @@ class WebDashboard:
 
         return web.json_response({
             "status": "healthy",
+            "version": "v2.5-headless",
+            "is_paused": is_paused,
             "state": state_name,
             "channel": watching_channel.name if watching_channel else None,
             "uptime_hours": uptime,
@@ -2169,8 +2276,14 @@ class WebDashboard:
             except Exception:
                 pass
 
+        is_paused = bool(getattr(self.twitch, "is_paused", False))
+        raw_state = self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN"
+        state_name = "PAUSED" if is_paused else raw_state
+
         data = {
-            "state": self.twitch._state.name if hasattr(self.twitch, "_state") else "UNKNOWN",
+            "version": "v2.5-headless",
+            "is_paused": is_paused,
+            "state": state_name,
             "priority_mode": self.twitch.settings.priority_mode.name,
             "channel": channel_data,
             "drop": drop_data,
@@ -2231,11 +2344,53 @@ class WebDashboard:
         return web.json_response({"status": "ok", "message": "2FA code submitted successfully!"})
 
     async def handle_switch(self, request: web.Request) -> web.Response:
-        """Forces channel switch."""
+        """Forces channel switch and clears paused state if set."""
         logger.info("Web Dashboard: Force switch requested")
+        self.is_paused = False
         self.twitch.stop_watching()
         self.twitch.change_state(State.CHANNEL_SWITCH)
         return web.json_response({"status": "ok", "message": "Channel switch triggered"})
+
+    async def handle_pause(self, request: web.Request) -> web.Response:
+        """Pauses drop mining loop, releases stream, and sleeps in IDLE state."""
+        logger.info("Web Dashboard: Mining paused by user")
+        if hasattr(self.twitch, "pause"):
+            self.twitch.pause()
+        else:
+            self.twitch.is_paused = True
+            if hasattr(self.twitch, "stop_watching"):
+                self.twitch.stop_watching()
+            if hasattr(self.twitch, "change_state"):
+                self.twitch.change_state(State.IDLE)
+        return web.json_response({
+            "status": "ok",
+            "is_paused": True,
+            "state": "PAUSED",
+            "message": "Mining paused. Container remains active in idle state."
+        })
+
+    async def handle_resume(self, request: web.Request) -> web.Response:
+        """Resumes drop mining loop and triggers channel switch."""
+        logger.info("Web Dashboard: Mining resumed by user")
+        if hasattr(self.twitch, "resume"):
+            self.twitch.resume()
+        else:
+            self.twitch.is_paused = False
+            if hasattr(self.twitch, "change_state"):
+                self.twitch.change_state(State.CHANNEL_SWITCH)
+        return web.json_response({
+            "status": "ok",
+            "is_paused": False,
+            "state": "CHANNEL_SWITCH",
+            "message": "Mining resumed! Discovering eligible streamers..."
+        })
+
+    async def handle_toggle_pause(self, request: web.Request) -> web.Response:
+        """Toggles drop mining between paused and active."""
+        if self.is_paused:
+            return await self.handle_resume(request)
+        else:
+            return await self.handle_pause(request)
 
     async def handle_refresh(self, request: web.Request) -> web.Response:
         """Forces campaigns inventory refresh."""

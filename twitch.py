@@ -214,6 +214,7 @@ class _AuthState:
 class Twitch:
     def __init__(self, settings: Settings):
         self.settings: Settings = settings
+        self.is_paused: bool = False
         self._state: State = State.IDLE
         self._state_change = asyncio.Event()
         self._close_requested = asyncio.Event()
@@ -382,6 +383,28 @@ class Twitch:
         if self._state is not State.EXIT:
             self._state = state
         self._state_change.set()
+
+    def pause(self) -> None:
+        """Pauses drop mining loop, releases active stream, and enters IDLE state."""
+        self.is_paused = True
+        self.stop_watching()
+        self.change_state(State.IDLE)
+        logger.info("Twitch drops mining paused by user.")
+
+    def resume(self) -> None:
+        """Resumes drop mining loop and triggers channel switch."""
+        self.is_paused = False
+        self.change_state(State.CHANNEL_SWITCH)
+        logger.info("Twitch drops mining resumed by user.")
+
+    def toggle_pause(self) -> bool:
+        """Toggles between paused and running. Returns new is_paused state."""
+        if self.is_paused:
+            self.resume()
+            return False
+        else:
+            self.pause()
+            return True
 
     def close(self):
         self.change_state(State.EXIT)
@@ -675,6 +698,9 @@ class Twitch:
                 try:
                     await asyncio.wait_for(self._state_change.wait(), timeout=next_start)
                 except asyncio.TimeoutError:
+                    if getattr(self, "is_paused", False):
+                        logger.debug("Mining is paused by user; remaining in IDLE state.")
+                        continue
                     logger.info("Idle timeout reached. Proactively re-scanning inventory.")
                     self.change_state(State.INVENTORY_FETCH)
             

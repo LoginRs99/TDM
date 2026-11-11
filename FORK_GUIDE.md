@@ -65,7 +65,7 @@ flowchart TD
 
 | File | What Was Changed | Why | Upstream Sync Precaution |
 | :--- | :--- | :--- | :--- |
-| `twitch.py` | • Stripped all Tkinter GUI references (`self.gui`, `LoginForm`, `gui_print`, `gui_close`, `_display()`).<br>• Replaced interactive GUI login with automated cookie session restoration (`cookies.jar`), Playwright auto-refresh (`cookie_refresher.py`), and 2FA token handling.<br>• Integrated `DiscordNotifier`, `HealthcheckWriter`, and `Metrics`.<br>• Added `get_balanced_priority()` algorithm (`PriorityMode.BALANCED`).<br>• Enforced priority precedence over exclusions (`priority` overrides `exclude`).<br>• Dynamic cookie file reload watcher (`check_cookies_updated()`).<br>• Resilient handling for `aiohttp.ContentTypeError` and transient GQL dropouts. | Central orchestrator. Headless operation requires automated authentication, metric tracking, and webhook alerts without desktop windows. | **CRITICAL**: Upstream recently added `_browser_login()` using `zendriver` for desktop Chrome login. **DO NOT** import or use `zendriver` / `_browser_login()` or GUI callbacks in `twitch.py`. Keep headless cookie auth, Playwright auto-refresh, and balanced priority intact. |
+| `twitch.py` | • Stripped all Tkinter GUI references (`self.gui`, `LoginForm`, `gui_print`, `gui_close`, `_display()`).<br>• Replaced interactive GUI login with automated cookie session restoration (`cookies.jar`), Playwright auto-refresh (`cookie_refresher.py`), and 2FA token handling.<br>• Integrated `DiscordNotifier`, `HealthcheckWriter`, and `Metrics`.<br>• Added `get_balanced_priority()` algorithm (`PriorityMode.BALANCED`).<br>• Added `is_paused`, `pause()`, `resume()`, and `toggle_pause()` with persistent IDLE pause handling.<br>• Enforced priority precedence over exclusions (`priority` overrides `exclude`).<br>• Dynamic cookie file reload watcher (`check_cookies_updated()`).<br>• Resilient handling for `aiohttp.ContentTypeError` and transient GQL dropouts. | Central orchestrator. Headless operation requires automated authentication, metric tracking, and webhook alerts without desktop windows. | **CRITICAL**: Upstream recently added `_browser_login()` using `zendriver` for desktop Chrome login. **DO NOT** import or use `zendriver` / `_browser_login()` or GUI callbacks in `twitch.py`. Keep headless cookie auth, Playwright auto-refresh, and balanced priority intact. |
 | `channel.py` | • Removed `self.display()` GUI calls.<br>• Added atomic `stream = self._stream` capture.<br>• Caught `RequestException` in `send_watch()`.<br>• Synced playlist HEAD request mining method (`f693b0c`) with spade fallback. | Prevents GUI crashes, avoids `NoneType` race condition when stream goes offline, and survives transient network drops. | When upstream updates `send_watch()`, preserve the local `stream = self._stream` assignment, `RequestException` try/except block, and spade fallback. |
 | `inventory.py` | • Replaced GUI notifications with `logger.info()`.<br>• Stubbed `_on_state_changed()` to `pass`.<br>• Synced zero-delta timer fix (`378697a`). | Headless mode has no Tkinter window or system tray. | Ensure drop claim logging remains in `claim()` and delta bound checks in `_update_real_minutes()` / `update_minutes()` remain intact. |
 | `constants.py` | • `LOG_PATH = Path(WORKING_DIR, "logs", "log.txt")`<br>• `PING_TIMEOUT = 30s`<br>• `WATCH_INTERVAL = 20s`<br>• Added `PriorityMode.BALANCED`.<br>• Synced Chrome 156 and Android App 31.8.0 user-agents (`69a4ff9`). | Supports Docker volume mounts (`/logs`), prevents false timeout disconnects on high-latency hosts, and matches upstream HEAD request timing. | Upstream periodically updates User Agents (Chrome, Android App) and GQL query hashes (`GameDirectory`, etc.). These can be safely merged. Retain the `LOG_PATH` subdirectory, `PING_TIMEOUT = 30s`, `WATCH_INTERVAL = 20s`, and `PriorityMode.BALANCED`. |
@@ -95,9 +95,11 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 - Built with `discord.py` application commands and interactive views:
   - `/status`: Interactive status dashboard embed with action buttons:
     - 🔄 **Switch Channel**: Request immediate channel switch.
+    - ⏸️ **Pause / Resume**: Toggle drops mining loop on/off without stopping Docker container.
     - 📦 **Refresh Campaigns**: Trigger drop inventory re-check.
     - 🔐 **Refresh Cookies**: Trigger Playwright headless session refresh.
     - 📋 **Mode Select Dropdown**: Live switch between `BALANCED`, `PRIORITY_ONLY`, `ENDING_SOONEST`, and `LOW_AVBL_FIRST`.
+  - `/pause` & `/resume`: Direct commands to pause or resume drops mining.
   - `/games`: List active campaigns with priority and exclusion status.
   - `/drops`: Detailed drop progress bars across all active campaigns.
   - `/settings`: Interactive viewer and configuration for miner settings.
@@ -123,25 +125,31 @@ These files do not exist upstream. They can be edited, extended, or refactored f
   - Global `tree.on_error` handler catches and reports interaction exceptions cleanly.
   - Game autocomplete for easy command input.
 
-#### 3. `web_dashboard.py` (Tabbed Full-Page Control Center & REST API)
+#### 3. `web_dashboard.py` (5-Tab Full-Page Control Center & REST API)
 - Decoupled `aiohttp.web` service running on port `8080` (or `WEB_PORT`).
+- **Engine Version & Header**: Displays version `v2.5` badge with real-time status badges (Twitch API health, RAM usage, live mining state).
 - **Tabbed Full-Page Single Page Application (SPA)** with Twitch-themed dark mode:
   - **Overview Tab**:
-    - **Active Farm Hero Banner**: Live channel card with streamer title, viewer count, Twitch link, and live Twitch purple badge.
+    - **Active Farm Hero Banner**: Live channel card with streamer title, viewer count, Twitch link, live Twitch purple/amber badge, and direct Twitch Drops Inventory link (`🎁 Twitch Inventory ↗`).
     - **Visual Drop Progress**: Real-time drop progress bar with ETA countdown, remaining minutes, and direct Twitch CDN reward item thumbnails (weapons, skins, lootboxes).
-    - **1-Click Active Farm Controls**: Immediate `⭐ Prioritize Game` (promotes current game to #1 priority), `🚫 Exclude Game` (excludes game and triggers immediate channel switch), and `⏭️ Skip Streamer` (switches to another eligible streamer).
+    - **Hero Action Controls**: Immediate `⏸️ Pause` / `▶️ Resume Mining` toggle, `⭐ Prioritize Game` (promotes current game to #1 priority), `🚫 Exclude Game` (excludes game and triggers immediate channel switch), and `⏭️ Skip Streamer`.
     - **Metrics Grid**: Drops claimed (synchronized with cumulative inventory counts), uptime, watch time, and success rate.
-    - **Quick Actions Panel**: Switch channel, refresh inventory, Playwright cookie refresh, Discord notification toggle, and 2FA interactive challenge solver.
+    - **Quick Controls Card**: Full-width Pause/Resume button, Switch channel, Refresh inventory, Playwright cookie refresh, Discord notification toggle, and 2FA interactive challenge solver.
   - **Campaigns Tab**:
     - Complete drop campaigns browser with real-time search across games and campaign names.
     - 5 Filter Views: `All`, `🔥 Farming Now`, `⭐ Priority`, `🚫 Excluded`, and `🔗 Linked`.
+    - Direct Twitch Inventory button (`🎁 Open Twitch Inventory ↗`) in toolbar header.
     - Dynamic Game Box Art Cover Images: Renders Twitch box art formatted via `format_box_art()`.
-    - Fast-Action One-Click Controls: `⭐ Priority` and `🚫 Exclude` buttons right on every campaign card without entering Settings.
+    - Fast-Action One-Click Controls: `⭐ Priority` and `🚫 Exclude` buttons right on every campaign card.
     - Collapsible Drops Breakdown: Individual drop progress bars with reward item thumbnail images from Twitch CDN.
-  - **Settings Tab**: Comprehensive in-browser configuration management eliminating manual `settings.json` editing:
+  - **Priority & Blocklist Tab (`tab-rules`)**:
+    - Dedicated management interface for ranked game priorities and exclusions.
+    - Quick-Pick Suggestion Chips: Instant 1-click addition chips for currently active drop campaigns and previously farmed games.
+    - Smart Autocomplete Dropdowns: Floating box-art autocomplete inputs with live status badges (`🔥 Active Now`, `📦 Claimed`).
+    - Ranked Priority Queue: Drag/order controls (`▲`, `▼`, `⭐ Top`, `✕ Remove`).
+    - Wildcard Exclusion Support: Exclude entire franchises or editions with wildcards (e.g. `World of Tanks*`, `FIFA*`).
+  - **Settings Tab**: Comprehensive in-browser configuration management with detailed tip callouts on every single setting:
     - *Mining Strategy*: Priority Mode (Balanced, Priority Only, Ending Soonest, Low Availability First), Connection Quality, Stale Stream Timeout, Maintenance Interval, Available Drops check, Badges/Emotes toggle.
-    - *Ranked Priority Queue*: Ranked drag/order controls (`▲`, `▼`, `⭐ Top`, `✕ Remove`), autocomplete input from live campaigns.
-    - *Excluded Games*: Tag cloud with one-click remove chips (`✕`), autocomplete input, and full wildcard pattern support (`World of Tanks*`).
     - *Discord Notifications & Bot*: Webhook URL (masked), notifications toggle switch, summary interval presets (1h, 6h, 12h, 24h, 1 week), "Send Test Webhook" button, and bot token/owner ID status badges.
     - *Account & Security*: Playwright auto cookie refresh toggle, Web UI password update, and safe "Log Out of Twitch" action.
   - **Live Logs Tab**: In-browser real-time console streaming from an in-memory `WebLogHandler` circular buffer (`maxlen=500`), level filtering (`ALL`, `INFO`, `WARNING`, `ERROR`), auto-scroll toggle, "Copy All" and "Clear View" controls.
@@ -151,10 +159,10 @@ These files do not exist upstream. They can be edited, extended, or refactored f
   - Dark-mode SVG data URI fallbacks prevent broken image placeholder boxes if Twitch CDN assets fail to load.
 - **REST Endpoints**:
   - `GET /`, `GET /login`, `POST /login`, `GET /logout`
-  - `GET /api/health`: Container health check endpoint.
-  - `GET /api/status`: Real-time JSON status of miner, channels, drops, metrics, and network connectivity.
+  - `GET /api/health`: Container health check endpoint (reports version, health status, and pause state).
+  - `GET /api/status`: Real-time JSON status of miner, channels, drops, metrics, network connectivity, and pause state.
   - `GET /api/campaigns`: Detailed active drop campaigns inventory with individual drops breakdown.
-  - `GET /api/settings`: Sanitized settings dictionary with masked webhook and option catalogs.
+  - `GET /api/settings`: Sanitized settings dictionary with masked webhook, option catalogs, and games catalog.
   - `POST /api/settings`: Atomic validation, disk persistence, and dynamic runtime propagation for configuration updates.
   - `POST /api/settings/priority`: Fine-grained priority ranking actions (`add`, `remove`, `move_up`, `move_down`, `top`).
   - `POST /api/settings/exclude`: Add or remove games from the exclusion list.
@@ -164,7 +172,10 @@ These files do not exist upstream. They can be edited, extended, or refactored f
   - `GET /api/2fa/status`: Whether a 2FA challenge is currently pending.
   - `GET /api/2fa/screenshot`: PNG image of the Twitch 2FA challenge screen.
   - `POST /api/action/submit-2fa`: Submit 2FA token to Playwright.
-  - `POST /api/action/switch`: Request stream switch.
+  - `POST /api/action/pause`: Pause drop mining loop, release active stream, and enter IDLE state.
+  - `POST /api/action/resume`: Resume drop mining loop and initiate channel switch.
+  - `POST /api/action/toggle-pause`: Toggle mining loop between paused and active.
+  - `POST /api/action/switch`: Request stream switch (automatically unpauses if paused).
   - `POST /api/action/refresh`: Refresh drop inventory.
   - `POST /api/action/refresh-cookies`: Trigger Playwright cookie renewal.
   - `POST /api/action/toggle-notifications`: Toggle Discord webhook alerts.
@@ -419,7 +430,7 @@ Before committing, merging, or deploying changes, run through this checklist:
   ```bash
   python test_suite.py
   ```
-  Verify that all **35/35 tests pass** (`OK`).
+  Verify that all **36/36 tests pass** (`OK`).
 - [ ] **Run Module Import Audit**:
   ```bash
   python -c "import channel, constants, inventory, utils, settings, twitch, main, web_dashboard, discord_notifier, discord_bot, cookie_refresher, metrics, healthcheck, healthcheck_writer, config_validator"

@@ -46,9 +46,32 @@ class StatusView(discord.ui.View):
             await interaction.response.send_message("⛔ You are not authorized to control this miner.", ephemeral=True)
             return
 
+        self.bot_service.twitch.is_paused = False
         self.bot_service.twitch.stop_watching()
         self.bot_service.twitch.change_state(State.CHANNEL_SWITCH)
         await interaction.response.send_message("🔄 Channel switch requested! Miner is switching stream...", ephemeral=True)
+
+    @discord.ui.button(label="Pause / Resume", style=discord.ButtonStyle.secondary, emoji="⏸️", custom_id="tdm_btn_pause")
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_auth(interaction):
+            await interaction.response.send_message("⛔ You are not authorized to control this miner.", ephemeral=True)
+            return
+
+        if getattr(self.bot_service.twitch, "is_paused", False):
+            if hasattr(self.bot_service.twitch, "resume"):
+                self.bot_service.twitch.resume()
+            else:
+                self.bot_service.twitch.is_paused = False
+                self.bot_service.twitch.change_state(State.CHANNEL_SWITCH)
+            await interaction.response.send_message("▶️ Mining resumed! Looking for eligible channels...", ephemeral=True)
+        else:
+            if hasattr(self.bot_service.twitch, "pause"):
+                self.bot_service.twitch.pause()
+            else:
+                self.bot_service.twitch.is_paused = True
+                self.bot_service.twitch.stop_watching()
+                self.bot_service.twitch.change_state(State.IDLE)
+            await interaction.response.send_message("⏸️ Mining paused! Miner will remain in IDLE state until resumed.", ephemeral=True)
 
     @discord.ui.button(label="Refresh Campaigns", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="tdm_btn_refresh")
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -220,13 +243,15 @@ class DiscordBotService:
 
             try:
                 wc = service.twitch.watching_channel.get_with_default(None)
-                state_name = service.twitch._state.name if hasattr(service.twitch, "_state") else "UNKNOWN"
+                is_paused = getattr(service.twitch, "is_paused", False)
+                state_name = "PAUSED (⏸️)" if is_paused else (service.twitch._state.name if hasattr(service.twitch, "_state") else "UNKNOWN")
                 mode_raw = getattr(service.twitch.settings, "priority_mode", "BALANCED")
                 mode_name = mode_raw.name if hasattr(mode_raw, "name") else str(mode_raw)
 
+                color = 0xF59E0B if is_paused else (0x9146FF if wc else 0x36393F)
                 embed = discord.Embed(
                     title="⛏️ Twitch Drops Miner - Live Status",
-                    color=0x9146FF if wc else 0x36393F,
+                    color=color,
                     timestamp=datetime.now(timezone.utc),
                 )
                 embed.add_field(name="Status", value=f"`{state_name}`", inline=True)
@@ -275,6 +300,33 @@ class DiscordBotService:
                 logger.error(f"Error in /status command: {e}", exc_info=True)
                 if deferred:
                     await interaction.followup.send(f"⚠️ Error retrieving status: {e}", ephemeral=True)
+
+        # --- /pause Command ---
+        @bot.tree.command(name="pause", description="Pause drops mining loop without stopping Docker container")
+        async def cmd_pause(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ You are not authorized to run this command.", ephemeral=True)
+                return
+            if hasattr(service.twitch, "pause"):
+                service.twitch.pause()
+            else:
+                service.twitch.is_paused = True
+                service.twitch.stop_watching()
+                service.twitch.change_state(State.IDLE)
+            await interaction.response.send_message("⏸️ Mining paused! Miner will remain in IDLE state until resumed.", ephemeral=True)
+
+        # --- /resume Command ---
+        @bot.tree.command(name="resume", description="Resume drops mining loop and find eligible streamers")
+        async def cmd_resume(interaction: discord.Interaction):
+            if not service.is_authorized(interaction):
+                await interaction.response.send_message("⛔ You are not authorized to run this command.", ephemeral=True)
+                return
+            if hasattr(service.twitch, "resume"):
+                service.twitch.resume()
+            else:
+                service.twitch.is_paused = False
+                service.twitch.change_state(State.CHANNEL_SWITCH)
+            await interaction.response.send_message("▶️ Mining resumed! Searching for active streamers...", ephemeral=True)
 
         # --- /games Command ---
         @bot.tree.command(name="games", description="List active Twitch drop campaigns, priority and excluded status")
@@ -395,7 +447,7 @@ class DiscordBotService:
                 color=0x5865F2,
                 description="Interactive Discord bot commands to monitor and control your headless drop miner.",
             )
-            embed.add_field(name="📊 Status & Drops", value="`/status` - Live stream status, progress bar and action buttons\n`/games` - Overview of all campaigns and priority/excluded flags\n`/drops` - Detailed progress for active drop campaigns", inline=False)
+            embed.add_field(name="📊 Status & Mining Controls", value="`/status` - Live stream status, progress bar and action buttons\n`/pause` - Pause mining loop without stopping Docker container\n`/resume` - Resume mining loop and start stream discovery\n`/games` - Overview of all campaigns and priority/excluded flags\n`/drops` - Detailed progress for active drop campaigns", inline=False)
             embed.add_field(name="⭐ Priority Management", value="`/priority list` - Show current priority game order & live status\n`/priority add <game> [rank]` - Add game or set rank (1 = top)\n`/priority move <game> <new_rank>` - Change rank of an existing game\n`/priority top <game>` - Promote game to Rank #1 (highest priority)\n`/priority remove <game>` - Remove a game from priority list\n`/priority clear` - Clear entire priority list", inline=False)
             embed.add_field(name="🚫 Excluded Games", value="`/exclude list` - Show excluded games\n`/exclude add <game>` - Blacklist a game\n`/exclude remove <game>` - Unblacklist a game", inline=False)
             embed.add_field(name="⚙️ Configuration & 2FA", value="`/settings` - Interactive settings viewer & priority mode selector\n`/notifications` - Toggle/configure Discord webhook notifications\n`/weekly` - View and send 7-day weekly mining summary\n`/2fa <code>` - Submit 2FA code for headless Playwright login", inline=False)
