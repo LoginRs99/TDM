@@ -65,12 +65,12 @@ flowchart TD
 
 | File | What Was Changed | Why | Upstream Sync Precaution |
 | :--- | :--- | :--- | :--- |
-| `twitch.py` | • Stripped all Tkinter GUI references (`self.gui`, `LoginForm`, `gui_print`, `gui_close`, `_display()`).<br>• Replaced interactive GUI login with automated cookie session restoration (`cookies.jar`), Playwright auto-refresh (`cookie_refresher.py`), and 2FA token handling.<br>• Integrated `DiscordNotifier`, `HealthcheckWriter`, and `Metrics`.<br>• Added `get_balanced_priority()` algorithm (`PriorityMode.BALANCED`).<br>• Added dynamic cookie file reload watcher (`check_cookies_updated()`).<br>• Resilient handling for `aiohttp.ContentTypeError` and transient GQL dropouts. | Central orchestrator. Headless operation requires automated authentication, metric tracking, and webhook alerts without desktop windows. | **CRITICAL**: Upstream recently added `_browser_login()` using `zendriver` for desktop Chrome login. **DO NOT** import or use `zendriver` / `_browser_login()` or GUI callbacks in `twitch.py`. Keep headless cookie auth, Playwright auto-refresh, and balanced priority intact. |
+| `twitch.py` | • Stripped all Tkinter GUI references (`self.gui`, `LoginForm`, `gui_print`, `gui_close`, `_display()`).<br>• Replaced interactive GUI login with automated cookie session restoration (`cookies.jar`), Playwright auto-refresh (`cookie_refresher.py`), and 2FA token handling.<br>• Integrated `DiscordNotifier`, `HealthcheckWriter`, and `Metrics`.<br>• Added `get_balanced_priority()` algorithm (`PriorityMode.BALANCED`).<br>• Enforced priority precedence over exclusions (`priority` overrides `exclude`).<br>• Dynamic cookie file reload watcher (`check_cookies_updated()`).<br>• Resilient handling for `aiohttp.ContentTypeError` and transient GQL dropouts. | Central orchestrator. Headless operation requires automated authentication, metric tracking, and webhook alerts without desktop windows. | **CRITICAL**: Upstream recently added `_browser_login()` using `zendriver` for desktop Chrome login. **DO NOT** import or use `zendriver` / `_browser_login()` or GUI callbacks in `twitch.py`. Keep headless cookie auth, Playwright auto-refresh, and balanced priority intact. |
 | `channel.py` | • Removed `self.display()` GUI calls.<br>• Added atomic `stream = self._stream` capture.<br>• Caught `RequestException` in `send_watch()`.<br>• Synced playlist HEAD request mining method (`f693b0c`) with spade fallback. | Prevents GUI crashes, avoids `NoneType` race condition when stream goes offline, and survives transient network drops. | When upstream updates `send_watch()`, preserve the local `stream = self._stream` assignment, `RequestException` try/except block, and spade fallback. |
 | `inventory.py` | • Replaced GUI notifications with `logger.info()`.<br>• Stubbed `_on_state_changed()` to `pass`.<br>• Synced zero-delta timer fix (`378697a`). | Headless mode has no Tkinter window or system tray. | Ensure drop claim logging remains in `claim()` and delta bound checks in `_update_real_minutes()` / `update_minutes()` remain intact. |
 | `constants.py` | • `LOG_PATH = Path(WORKING_DIR, "logs", "log.txt")`<br>• `PING_TIMEOUT = 30s`<br>• `WATCH_INTERVAL = 20s`<br>• Added `PriorityMode.BALANCED`.<br>• Synced Chrome 156 and Android App 31.8.0 user-agents (`69a4ff9`). | Supports Docker volume mounts (`/logs`), prevents false timeout disconnects on high-latency hosts, and matches upstream HEAD request timing. | Upstream periodically updates User Agents (Chrome, Android App) and GQL query hashes (`GameDirectory`, etc.). These can be safely merged. Retain the `LOG_PATH` subdirectory, `PING_TIMEOUT = 30s`, `WATCH_INTERVAL = 20s`, and `PriorityMode.BALANCED`. |
 | `websocket.py` | • Clamped default WebSocket logging to `WARNING` to eliminate reconnect noise.<br>• Resilient exception handling on `ConnectionResetError` and `ClientConnectionError`.<br>• Auto-reconnect trigger on broken pipes. | Prevents unhandled websocket crashes and excessive logging in containerized network environments. | Keep error suppression and auto-reconnect triggers when merging upstream websocket changes. |
-| `utils.py` | • Removed `tkinter` and `webbrowser` desktop imports.<br>• Hardened `json_save()` with atomic `.new` rename and Docker bind-mount `EBUSY` / `EXDEV` fallback (`shutil.copyfile`).<br>• Added `is_special = is_special_events` alias.<br>• Maintained cross-platform file locking (`linux`, `darwin`, `win32`). | Prevents headless environments from attempting to load X11/Tk displays and allows settings persistence inside bind-mounted containers. | Do not re-introduce `tkinter` or GUI-dependent imports into `utils.py`. |
+| `utils.py` | • Removed `tkinter` and `webbrowser` desktop imports.<br>• Hardened `json_save()` with atomic `.new` rename and Docker bind-mount `EBUSY` / `EXDEV` fallback (`shutil.copyfile`).<br>• Added `is_game_excluded(game_name, exclude_set)` with case-insensitive exact matching, distinct game edition support (e.g. `World of Tanks` does not exclude `World of Tanks: HEAT`), and wildcard pattern matching (`World of Tanks*`).<br>• Added `is_special = is_special_events` alias.<br>• Maintained cross-platform file locking (`linux`, `darwin`, `win32`). | Prevents headless environments from attempting to load X11/Tk displays, allows settings persistence inside bind-mounted containers, and prevents accidental exclusion collisions across game editions. | Do not re-introduce `tkinter` or GUI-dependent imports into `utils.py`. Preserve wildcard and edition logic in `is_game_excluded`. |
 | `settings.py` | • Added Docker environment variable overrides (`DISCORD_*`, `WEB_*`, `TWITCH_*`, `PRIORITY_MODE`, `MAINTENANCE_INTERVAL_MINUTES`, `LOGGING_LEVEL`).<br>• Added `discord_notifications_enabled: bool`.<br>• Added 1-week interval parsing (`1w`, `7d`, up to 10080 minutes).<br>• Priority list ranking operations and graceful handling of read-only filesystems. | Allows configuration via `.env` and `docker-compose.yml` without editing JSON files directly. | Keep environment variable loaders, notification toggle fields, and priority list setters intact. |
 | `main.py` | • Headless startup banner and configuration preflight validation (`config_validator.py`).<br>• Command-line flags (`--log`, `--dump`, `--login`, `--refresh-cookies`, `--headful`, `-v`).<br>• Added POSIX and Windows signal handling (`SIGINT`, `SIGTERM`) for clean Docker shutdowns.<br>• Spawns Web Dashboard and Discord Bot services in asyncio background tasks.<br>• Multi-handler rotating loggers (`main.log`, `errors.log`, `debug.log`).<br>• Writes metrics on exit. | Replaces Tkinter main loop with server-grade daemon lifecycle. | Upstream changes to `main.py` are rare; when merging, preserve the async services initialization, signal handlers, and lock file mechanism. |
 | `requirements.txt` | • Removed GUI/desktop packages (`Pillow`, `pystray`, `zendriver`, `PyGObject`, `pywin32`).<br>• Added headless container packages (`playwright>=1.40.0`, `discord.py>=2.3.0`, `psutil`, `colorama`, `yarl`). | Minimizes image footprint and supports headless Playwright, Discord bot, and metrics. | Never re-add GUI libraries (`Pillow`, `pystray`, `zendriver`) to `requirements.txt`. |
@@ -126,16 +126,29 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 #### 3. `web_dashboard.py` (Tabbed Full-Page Control Center & REST API)
 - Decoupled `aiohttp.web` service running on port `8080` (or `WEB_PORT`).
 - **Tabbed Full-Page Single Page Application (SPA)** with Twitch-themed dark mode:
-  - **Overview Tab**: Live channel card with streamer avatar and Twitch link, real-time drop progress bar with ETA and campaign drop counts, performance metrics grid (Drops claimed, watch time, success rate, priority mode), quick actions panel (Switch channel, refresh inventory, Playwright cookie refresh, Discord notification toggle), and 2FA interactive challenge solver.
-  - **Campaigns Tab**: Complete drop campaigns browser with search, filters (All, Linked, Unlinked, Priority, Excluded), reward details breakdown, and fast-action one-click `+ Prioritize` (promotes to #1 in queue) and `🚫 Exclude` buttons.
+  - **Overview Tab**:
+    - **Active Farm Hero Banner**: Live channel card with streamer title, viewer count, Twitch link, and live Twitch purple badge.
+    - **Visual Drop Progress**: Real-time drop progress bar with ETA countdown, remaining minutes, and direct Twitch CDN reward item thumbnails (weapons, skins, lootboxes).
+    - **1-Click Active Farm Controls**: Immediate `⭐ Prioritize Game` (promotes current game to #1 priority), `🚫 Exclude Game` (excludes game and triggers immediate channel switch), and `⏭️ Skip Streamer` (switches to another eligible streamer).
+    - **Metrics Grid**: Drops claimed (synchronized with cumulative inventory counts), uptime, watch time, and success rate.
+    - **Quick Actions Panel**: Switch channel, refresh inventory, Playwright cookie refresh, Discord notification toggle, and 2FA interactive challenge solver.
+  - **Campaigns Tab**:
+    - Complete drop campaigns browser with real-time search across games and campaign names.
+    - 5 Filter Views: `All`, `🔥 Farming Now`, `⭐ Priority`, `🚫 Excluded`, and `🔗 Linked`.
+    - Dynamic Game Box Art Cover Images: Renders Twitch box art formatted via `format_box_art()`.
+    - Fast-Action One-Click Controls: `⭐ Priority` and `🚫 Exclude` buttons right on every campaign card without entering Settings.
+    - Collapsible Drops Breakdown: Individual drop progress bars with reward item thumbnail images from Twitch CDN.
   - **Settings Tab**: Comprehensive in-browser configuration management eliminating manual `settings.json` editing:
     - *Mining Strategy*: Priority Mode (Balanced, Priority Only, Ending Soonest, Low Availability First), Connection Quality, Stale Stream Timeout, Maintenance Interval, Available Drops check, Badges/Emotes toggle.
     - *Ranked Priority Queue*: Ranked drag/order controls (`▲`, `▼`, `⭐ Top`, `✕ Remove`), autocomplete input from live campaigns.
-    - *Excluded Games*: Tag cloud with one-click remove and autocomplete input.
+    - *Excluded Games*: Tag cloud with one-click remove chips (`✕`), autocomplete input, and full wildcard pattern support (`World of Tanks*`).
     - *Discord Notifications & Bot*: Webhook URL (masked), notifications toggle switch, summary interval presets (1h, 6h, 12h, 24h, 1 week), "Send Test Webhook" button, and bot token/owner ID status badges.
     - *Account & Security*: Playwright auto cookie refresh toggle, Web UI password update, and safe "Log Out of Twitch" action.
   - **Live Logs Tab**: In-browser real-time console streaming from an in-memory `WebLogHandler` circular buffer (`maxlen=500`), level filtering (`ALL`, `INFO`, `WARNING`, `ERROR`), auto-scroll toggle, "Copy All" and "Clear View" controls.
-- **Security**: Optional password protection via `WEB_PASSWORD`. Supports session cookies (`tdm_auth`) and HTTP Bearer tokens. All endpoints enforce defensive security headers (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`).
+- **Security & Asset Resilience**:
+  - Optional password protection via `WEB_PASSWORD`. Supports session cookies (`tdm_auth`) and HTTP Bearer tokens.
+  - All endpoints enforce defensive security headers (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`).
+  - Dark-mode SVG data URI fallbacks prevent broken image placeholder boxes if Twitch CDN assets fail to load.
 - **REST Endpoints**:
   - `GET /`, `GET /login`, `POST /login`, `GET /logout`
   - `GET /api/health`: Container health check endpoint.
@@ -182,14 +195,16 @@ These files do not exist upstream. They can be edited, extended, or refactored f
 - Auto-recovers by converting any `cookies.txt` or `cookies.json` present in `files/`.
 
 #### 8. `test_suite.py` (Automated Parity & Regression Test Suite)
-- 23 automated unit and integration tests across 7 test classes:
+- **34 automated unit and integration tests across 9 test classes**:
   - `TestUpstreamSync`: Validates `WATCH_INTERVAL = 20s`, zero-delta drop timer fix (`378697a`), playlist HEAD request mining method (`f693b0c`), and Chrome 156 / Android App 31.8.0 user-agents (`69a4ff9`).
   - `TestDiscordNotifications`: Validates toggle disable/enable, webhook suppression, rich embed layouts, 1-week weekly summary digests, and test notifications.
   - `TestSettingsIntervals`: Validates 1-week interval parsing (`1w`, `7d`, `10080m`) and `DISCORD_NOTIFICATIONS_ENABLED` env parser.
   - `TestDiscordBotCommands`: Validates slash command registrations (`/notifications`, `/weekly`, `/priority`, `/exclude`, `/2fa`), persistent view registration, single-sync guard, and error handler.
-  - `TestWebDashboardAndHealthcheck`: Validates Web UI notification toggle, dynamic `WEB_PORT` healthcheck resolution, and network health reporting.
+  - `TestWebDashboardAndHealthcheck`: Validates Web UI notification toggle, dynamic `WEB_PORT` healthcheck resolution, priority/exclude endpoints, and network health reporting.
   - `TestNetworkResilienceAndLogging`: Validates `is_network_healthy` property under connection dropouts and verifies inactive game suggestions log at `INFO` level.
   - `TestJsonSaveAndPriorityRanking`: Validates Docker bind-mount `EBUSY` fallback (`shutil.copyfile`) and priority ranking CRUD logic.
+  - `TestBugFixesAndRegression`: Validates game exclusion exact matching, distinct game editions (e.g. `World of Tanks` vs `World of Tanks: HEAT`), wildcard pattern matching (`World of Tanks*`), priority override rule (`priority > exclude`), Discord bot 10062 timeout deferral, and Web Dashboard `now` variable and metrics mapping.
+  - `TestDashboardQOLFeatures`: Validates `format_box_art` templated URL normalization and mock handling, active farm recognition, channel title/viewer serialization, and drop benefit thumbnail parsing.
 
 ---
 
@@ -232,6 +247,13 @@ if active_campaign.availability <= 0.50:
   - Reorder existing game: `/priority move game:Rust new_rank:1`
   - List all ranks: `/priority list`
 - **Web Dashboard**: Displays `#1 Priority`, `#2 Priority` badges on campaign cards and sorts active campaigns according to user ranking order.
+
+### Game Exclusion Rules & Pattern Matching (`is_game_excluded`)
+In `utils.py`, `is_game_excluded(game_name, exclude_set)` enforces predictable and fine-grained exclusion rules:
+1. **Case-Insensitive Exact Matching**: `"world of tanks"` matches `"World of Tanks"`.
+2. **Distinct Game Editions Preservation**: Substrings are **never** accidentally matched. For example, having `"World of Tanks"` on your exclude list will **NOT** accidentally exclude `"World of Tanks: HEAT"` or `"World of Tanks Console"`.
+3. **Explicit Wildcard Pattern Matching**: Wildcard syntax using `*` is supported via `fnmatch`. For example, adding `"World of Tanks*"` to your exclude list intentionally excludes all editions beginning with that prefix.
+4. **Priority Precedence Over Exclude**: In `twitch.py`, if a game is configured in both `priority` and `exclude`, **priority always wins**. This allows users to broadly exclude a game family while specifically farming a favored priority edition.
 
 ---
 
@@ -397,7 +419,7 @@ Before committing, merging, or deploying changes, run through this checklist:
   ```bash
   python test_suite.py
   ```
-  Verify that all **28/28 tests pass** (`OK`).
+  Verify that all **34/34 tests pass** (`OK`).
 - [ ] **Run Module Import Audit**:
   ```bash
   python -c "import channel, constants, inventory, utils, settings, twitch, main, web_dashboard, discord_notifier, discord_bot, cookie_refresher, metrics, healthcheck, healthcheck_writer, config_validator"
